@@ -7,22 +7,32 @@ agents:
     role: "You are an analyst. Your task is to analyze the given information and provide insights."
     model: gpt-3.5-turbo
     provider: openai
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
   - name: skeptic
     role: "You are a skeptic. Your task is to question assumptions and identify potential flaws in the analysis."
     model: gpt-4
     provider: openai
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
   - name: summarizer
     role: "You are a summarizer. Your task is to condense information and provide clear summaries."
-    model: gpt-3.5-turbo
+    model: grok-3-beta
     provider: openai
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
   - name: fact_checker
     role: "You are a fact checker. Your task is to verify the accuracy of information and identify any discrepancies."
-    model: gpt-4
-    provider: openai
+    model: claude-4-6-opus
+    provider: anthropic
+    base_url: https://api.anthropic.com/v1
+    api_key: ${ANTHROPIC_API_KEY}
   - name: optimizer
     role: "You are an optimizer. Your task is to improve the efficiency and effectiveness of processes."
     model: gpt-4
     provider: openai
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
 
 debate:
   max_rounds: 3
