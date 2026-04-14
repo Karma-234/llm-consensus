@@ -27,6 +27,8 @@ type Agent struct {
 	Role     string `yaml:"role"`
 	Model    string `yaml:"model"`
 	Provider string `yaml:"provider"`
+	APIKey   string `yaml:"api_key"`
+	BaseURL  string `yaml:"base_url,omitempty"`
 }
 
 func LoadConfig(path string) (*Config, error) {

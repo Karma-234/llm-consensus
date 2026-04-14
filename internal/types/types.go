@@ -10,7 +10,7 @@ type LLMClient interface {
 type ChatRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
-	Temperature float64   `json:"temperature,omitempty"`
+	Temperature float32   `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
 }
 
