@@ -30,7 +30,7 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req types.ChatRequest
 	openAIReq := openai.ChatCompletionRequest{
 		Model:       c.model,
 		Messages:    convertToOpenAIMessages(req.Messages),
-		Temperature: req.Temperature,
+		Temperature: float32(req.Temperature),
 		MaxTokens:   req.MaxTokens,
 	}
 
