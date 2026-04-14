@@ -11,8 +11,8 @@ func NewChatClient(agent config.Agent) (types.LLMClient, error) {
 	switch agent.Provider {
 	case "openai", "xai", "groq":
 		return NewOpenAIClient(agent)
-	case "anthropic":
-		return NewAnthropicClient(agent)
+	// case "anthropic":
+	// 	return NewAnthropicClient(agent)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s for agent %s", agent.Provider, agent.Name)
 	}
