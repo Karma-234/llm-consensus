@@ -17,7 +17,8 @@ type Config struct {
 		StrictUnanimity    bool `yaml:"strict_unanimity"`
 		FallbackOnDeadlock bool `yaml:"fallback_on_deadlock"`
 	} `yaml:"debate"`
-	Output struct {
+	Presets map[string]Preset `yaml:"presets"`
+	Output  struct {
 		DefaultMode string `yaml:"default_mode"`
 	} `yaml:"output"`
 }
@@ -29,6 +30,12 @@ type Agent struct {
 	Provider string `yaml:"provider"`
 	APIKey   string `yaml:"api_key"`
 	BaseURL  string `yaml:"base_url,omitempty"`
+}
+
+type Preset struct {
+	MaxRounds       int    `yaml:"max_rounds"`
+	StrictUnanimity bool   `yaml:"strict_unanimity"`
+	OutputMode      string `yaml:"output_mode"`
 }
 
 func LoadConfig(path string) (*Config, error) {

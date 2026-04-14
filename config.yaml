@@ -15,24 +15,18 @@ agents:
     provider: openai
     base_url: https://api.openai.com/v1
     api_key: ${OPENAI_API_KEY}
-  - name: summarizer
-    role: "You are a summarizer. Your task is to condense information and provide clear summaries."
-    model: grok-3-beta
-    provider: openai
-    base_url: https://api.openai.com/v1
-    api_key: ${OPENAI_API_KEY}
   - name: fact_checker
     role: "You are a fact checker. Your task is to verify the accuracy of information and identify any discrepancies."
+    model: grok-3-beta
+    provider: openai
+    base_url: https://api.x.ai/v1
+    api_key: ${GROK_API_KEY}
+  - name: skeptic
+    role: "You are a skeptic. Your task is to question assumptions and identify potential flaws in the analysis."
     model: claude-4-6-opus
     provider: anthropic
     base_url: https://api.anthropic.com/v1
     api_key: ${ANTHROPIC_API_KEY}
-  - name: optimizer
-    role: "You are an optimizer. Your task is to improve the efficiency and effectiveness of processes."
-    model: gpt-4
-    provider: openai
-    base_url: https://api.openai.com/v1
-    api_key: ${OPENAI_API_KEY}
 
 debate:
   max_rounds: 3
@@ -41,3 +35,30 @@ debate:
 
 output:
   default_mode: debug
+
+virtual_models:
+  default: llm-consensus
+  presets:
+    llm-fast: fast
+    llm-balanced: balanced
+    llm-paranoid: paranoid
+    llm-debug: debug
+
+presets:
+  fast:
+    debate:
+      max_rounds: 1
+      strict_unanimity: false
+  balanced:
+    debate:
+      max_rounds: 2
+      strict_unanimity: true
+  paranoid:
+    debate:
+      max_rounds: 4
+      strict_unanimity: true
+  debug:
+    output:
+      default_mode: debug
+    debate:
+      stream_internal: true
