@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -17,11 +18,13 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/debate", func(w http.ResponseWriter, r *http.Request) {
-		// Handle debate logic here
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, `{"status":"ok"}`)
 	})
 	newServer := &http.Server{
-		Addr:    cfg.Server.Host + ":" + string(rune(cfg.Server.Port)),
+		Addr:    fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		Handler: mux,
 	}
 
@@ -30,7 +33,7 @@ func main() {
 
 	go func() {
 		log.Printf("Starting server on %s:%d", cfg.Server.Host, cfg.Server.Port)
-		if err := newServer.ListenAndServe(); err != nil {
+		if err := newServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()
