@@ -1,5 +1,43 @@
 package main
 
-func main() {
+import (
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/karma-234/llm-consensus/internal/config"
+)
+
+func main() {
+	cfg, err := config.LoadConfig("config.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debate", func(w http.ResponseWriter, r *http.Request) {
+		// Handle debate logic here
+	})
+	newServer := &http.Server{
+		Addr:    cfg.Server.Host + ":" + string(rune(cfg.Server.Port)),
+		Handler: mux,
+	}
+
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+
+	go func() {
+		log.Printf("Starting server on %s:%d", cfg.Server.Host, cfg.Server.Port)
+		if err := newServer.ListenAndServe(); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+	<-done
+	log.Println("Shutting down server...")
+	if err := newServer.Close(); err != nil {
+		log.Fatalf("Failed to shut down server: %v", err)
+	}
+	log.Println("Server stopped gracefully")
 }
