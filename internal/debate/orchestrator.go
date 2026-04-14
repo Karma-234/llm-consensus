@@ -3,7 +3,9 @@ package debate
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
+	"time"
 
 	"github.com/karma-234/llm-consensus/internal/config"
 	"github.com/karma-234/llm-consensus/internal/provider"
@@ -23,6 +25,11 @@ func NewOrchestrator(cfg *config.Config, clientFactory *provider.ClientFactory) 
 		cfg:           cfg,
 		clientFactory: clientFactory,
 	}
+}
+
+type DebateResult struct {
+	FinalAnswer string
+	Transcript  *Transcript
 }
 
 func (o *Orchestrator) runDraftPhase(ctx context.Context, messages []types.Message, transcript *Transcript) (map[string]string, error) {
@@ -151,7 +158,7 @@ func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []t
 			}
 			mu.Lock()
 			votes[agentName] = vote
-			// transcript.A
+			transcript.AddVote(agentName, vote)
 			mu.Unlock()
 
 		}(name)
@@ -164,4 +171,101 @@ func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []t
 	}
 
 	return votes, nil
+}
+
+func (o *Orchestrator) updateActiveAgents(votes map[string]Vote) []string {
+	var active []string
+	for name, v := range votes {
+		if !v.Approve || len(v.BlockingIssues) > 0 || v.Confidence < 0.75 {
+			active = append(active, name)
+		}
+	}
+	if len(active) == 0 {
+		// Fallback: keep at least one agent
+		if agents := o.clientFactory.GetAllClients(); len(agents) > 0 {
+			active = []string{agents[0]}
+		}
+	}
+	return active
+}
+
+func (o *Orchestrator) runSynthesizePhase(messages []types.Message, drafts, critiques map[string]string, transcript *Transcript) string {
+	prompt := o.prompt.SynthesizePrompt(messages, drafts, critiques)
+
+	agents := o.clientFactory.GetAllClients()
+	if len(agents) == 0 {
+		return "No agents available for synthesis."
+	}
+
+	client, _ := o.clientFactory.GetClient(agents[0])
+	resp, err := client.ChatCompletion(context.Background(), types.ChatRequest{
+		Messages:    []types.Message{{Role: "user", Content: prompt}},
+		Temperature: 0.5,
+	})
+	if err != nil {
+		log.Printf("Synthesis failed: %v", err)
+		return "Synthesis failed."
+	}
+
+	synthesized := resp.Content
+	transcript.AddSynthesisPhase(synthesized)
+	return synthesized
+}
+
+func (o *Orchestrator) fallbackToBestCandidate(candidate string, transcript *Transcript) string {
+	if candidate != "" && candidate != "Synthesis failed." {
+		return candidate
+	}
+	return "The agents were unable to reach consensus on this query. Please try rephrasing or using a different preset."
+}
+
+func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message) (DebateResult, error) {
+	start := time.Now()
+	maxRound := o.cfg.Debate.MaxRounds
+	transcript := NewTranscript(messages)
+
+	drafts, err := o.runDraftPhase(ctx, messages, transcript)
+	if err != nil {
+		return DebateResult{}, fmt.Errorf("draft phase failed: %w", err)
+	}
+
+	critiques, err := o.runCritiquePhase(ctx, messages, drafts, transcript)
+	if err != nil {
+		return DebateResult{}, fmt.Errorf("critique phase failed: %w", err)
+	}
+
+	candidate := o.runSynthesizePhase(messages, drafts, critiques, transcript)
+
+	activeAgents := o.clientFactory.GetAllClients()
+	for round := 1; round <= maxRound; round++ {
+		votes, err := o.runSelectiveVotingPhase(ctx, messages, activeAgents, candidate, transcript)
+		if err != nil {
+			return DebateResult{}, fmt.Errorf("voting phase failed: %w", err)
+		}
+		result := EvaluateConsensus(votes, o.cfg.Debate.StrictUnanimity)
+		transcript.AddVotingRound(round, votes, result.Issues)
+		activeAgents = o.updateActiveAgents(votes)
+		if result.ConsensusReached {
+			return DebateResult{
+				FinalAnswer: candidate,
+				Transcript:  transcript,
+			}, nil
+		}
+		if len(activeAgents) == 0 {
+			break
+		}
+		if round < maxRound {
+			activeAgents = o.updateActiveAgents(votes)
+			candidate = o.runSynthesizePhase(messages, drafts, critiques, transcript)
+		}
+	}
+
+	finalAnswer := o.fallbackToBestCandidate(candidate, transcript)
+	log.Printf("Debate ended with fallback after %v", time.Since(start))
+
+	transcript.SetFinalAnswer(finalAnswer)
+	return DebateResult{
+		FinalAnswer: finalAnswer,
+		Transcript:  transcript,
+	}, nil
 }

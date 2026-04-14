@@ -58,7 +58,7 @@ func (t *Transcript) AddSynthesisPhase(content string) {
 	})
 }
 
-func (t *Transcript) AddVote(agentName, vote Vote) {
+func (t *Transcript) AddVote(agentName string, vote Vote) {
 	t.addPhase("vote", map[string]any{
 		"agent":           agentName,
 		"approve":         vote.Approve,
