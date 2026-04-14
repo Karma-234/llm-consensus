@@ -41,7 +41,7 @@ func (c *AnthropicClient) ChatCompletion(ctx context.Context, req types.ChatRequ
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-API-Key", c.APIKey)
-	httpReq.Header.Set("X-Model", c.model)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
@@ -82,7 +82,7 @@ type anthropicRequest struct {
 }
 
 type anthropicMessage struct {
-	Role    string `json:"role"` // "system", "user", "assistant"
+	Role    string `json:"role"` // "user", "assistant"
 	Content string `json:"content"`
 }
 
@@ -98,13 +98,7 @@ type anthropicContentBlock struct {
 }
 
 func convertToAnthropicRequest(req types.ChatRequest) anthropicRequest {
-	anthropicMessages := make([]anthropicMessage, len(req.Messages))
-	for i, msg := range req.Messages {
-		anthropicMessages[i] = anthropicMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		}
-	}
+	anthropicMessages := convertMessagesToAnthropicFormat(req.Messages)
 	return anthropicRequest{
 		Model:       req.Model,
 		Messages:    anthropicMessages,
