@@ -14,7 +14,7 @@ func NewDebatePrompt() *DebatePrompt {
 	return &DebatePrompt{}
 }
 
-func (p *DebatePrompt) DraftPrompt(agentName string, messages []types.Message, round int) string {
+func (p *DebatePrompt) DraftPrompt(agentName string, messages []types.Message) string {
 	reqQuery := extractUserQuery(messages)
 
 	result := fmt.Sprintf(`You are %s, an expert AI assistant participating in a collaborative debate to produce the highest quality response.

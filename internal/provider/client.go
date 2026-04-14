@@ -42,6 +42,10 @@ func (f *ClientFactory) GetClient(agentName string) (types.LLMClient, error) {
 	return client, nil
 }
 
-func (f *ClientFactory) GetAllClients() map[string]types.LLMClient {
-	return f.clients
+func (f *ClientFactory) GetAllClients() []string {
+	names := make([]string, 0, len(f.clients))
+	for name := range f.clients {
+		names = append(names, name)
+	}
+	return names
 }
