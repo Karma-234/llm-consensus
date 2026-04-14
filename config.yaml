@@ -1,3 +1,20 @@
 server:
   host: 127.0.0.1
   port: 8080
+
+agents:
+  - name: analyst
+    role: "You are an analyst. Your task is to analyze the given information and provide insights."
+    model: gpt-3.5-turbo
+  - name: skeptic
+    role: "You are a skeptic. Your task is to question assumptions and identify potential flaws in the analysis."
+    model: gpt-4
+  - name: summarizer
+    role: "You are a summarizer. Your task is to condense information and provide clear summaries."
+    model: gpt-3.5-turbo
+  - name: fact_checker
+    role: "You are a fact checker. Your task is to verify the accuracy of information and identify any discrepancies."
+    model: gpt-4
+  - name: optimizer
+    role: "You are an optimizer. Your task is to improve the efficiency and effectiveness of processes."
+    model: gpt-4
