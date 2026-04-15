@@ -14,7 +14,7 @@ type Transcript struct {
 	FinalAnswer      string          `json:"final_answer,omitempty"`
 	TotalDuration    string          `json:"total_duration,omitempty"`
 	MetaData         map[string]any  `json:"meta_data,omitempty"`
-	Phases           []Phase         `json:"phases,"`
+	Phases           []Phase         `json:"phases"`
 }
 type Phase struct {
 	Name      string         `json:"name"`
@@ -121,7 +121,7 @@ func (t *Transcript) ToJSON() string {
 func (t *Transcript) ToCleanSummary() string {
 	var sb strings.Builder
 
-	sb.WriteString("=== Zettai-Ittchi Debate Transcript ===\n\n")
+	sb.WriteString("=== LLM-Consensus Debate Transcript ===\n\n")
 	fmt.Fprintf(&sb, "Final Answer:\n%s\n\n", t.FinalAnswer)
 
 	for i, phase := range t.Phases {

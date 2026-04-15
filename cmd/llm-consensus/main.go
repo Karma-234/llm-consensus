@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/karma-234/llm-consensus/internal/config"
+	"github.com/karma-234/llm-consensus/internal/handler"
 )
 
 func main() {
@@ -18,10 +19,16 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, `{"status":"ok"}`)
+	})
+
+	mux.HandleFunc("/v1/models", handler.HandleModels)
+
+	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		handler.HandleChatCompletions(w, r, cfg)
 	})
 	newServer := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),

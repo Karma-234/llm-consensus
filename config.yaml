@@ -9,8 +9,8 @@ agents:
     provider: openai
     base_url: https://api.openai.com/v1
     api_key: ${OPENAI_API_KEY}
-  - name: skeptic
-    role: "You are a skeptic. Your task is to question assumptions and identify potential flaws in the analysis."
+  - name: optimizer
+    role: "You are an optimizer. Your task is to suggest improvements and optimizations based on the analysis."
     model: gpt-4
     provider: openai
     base_url: https://api.openai.com/v1

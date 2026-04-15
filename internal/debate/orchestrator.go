@@ -63,8 +63,8 @@ func (o *Orchestrator) runDraftPhase(ctx context.Context, messages []types.Messa
 			}
 			mu.Lock()
 			drafts[agentName] = resp.Content
-			mu.Unlock()
 			transcript.AddDraftPhase(agentName, resp.Content)
+			mu.Unlock()
 
 		}(name)
 	}
@@ -109,8 +109,8 @@ func (o *Orchestrator) runCritiquePhase(ctx context.Context, messages []types.Me
 			}
 			mu.Lock()
 			critiques[agentName] = resp.Content
-			mu.Unlock()
 			transcript.AddCritiquePhase(agentName, resp.Content)
+			mu.Unlock()
 
 		}(name)
 	}
@@ -173,6 +173,35 @@ func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []t
 
 	return votes, nil
 }
+func (o *Orchestrator) runSelectiveRevisePhase(ctx context.Context, candidate string, issues []string, activeAgents []string, transcript *Transcript, messages []types.Message) string {
+	if len(activeAgents) == 0 {
+		return candidate
+	}
+
+	// Use only the first active agent for revision (efficient)
+	reviseAgent := activeAgents[0]
+	client, err := o.clientFactory.GetClient(reviseAgent)
+	if err != nil {
+		return candidate
+	}
+
+	prompt := o.prompt.RevisePrompt(messages, candidate, issues)
+
+	resp, err := client.ChatCompletion(ctx, types.ChatRequest{
+		Messages:    []types.Message{{Role: "user", Content: prompt}},
+		Temperature: 0.6,
+	})
+	if err != nil {
+		log.Printf("Revision failed for %s, keeping previous candidate", reviseAgent)
+		return candidate
+	}
+
+	newCandidate := resp.Content
+	transcript.AddRevision(reviseAgent, newCandidate, issues)
+	log.Printf("Revised by %s", reviseAgent)
+
+	return newCandidate
+}
 
 func (o *Orchestrator) updateActiveAgents(votes map[string]Vote) []string {
 	var active []string
@@ -190,7 +219,7 @@ func (o *Orchestrator) updateActiveAgents(votes map[string]Vote) []string {
 	return active
 }
 
-func (o *Orchestrator) runSynthesizePhase(messages []types.Message, drafts, critiques map[string]string, transcript *Transcript) string {
+func (o *Orchestrator) runSynthesizePhase(ctx context.Context, messages []types.Message, drafts, critiques map[string]string, transcript *Transcript) string {
 	prompt := o.prompt.SynthesizePrompt(messages, drafts, critiques)
 
 	agents := o.clientFactory.GetAllClients()
@@ -199,7 +228,7 @@ func (o *Orchestrator) runSynthesizePhase(messages []types.Message, drafts, crit
 	}
 
 	client, _ := o.clientFactory.GetClient(agents[0])
-	resp, err := client.ChatCompletion(context.Background(), types.ChatRequest{
+	resp, err := client.ChatCompletion(ctx, types.ChatRequest{
 		Messages:    []types.Message{{Role: "user", Content: prompt}},
 		Temperature: 0.5,
 	})
@@ -218,7 +247,7 @@ func (o *Orchestrator) fallbackToBestCandidate(candidate string) string {
 		return candidate
 	}
 	fallbackMsg := "The agents were unable to reach consensus on this query. " +
-		"Please try rephrasing your question or using a different preset (e.g. zettai-paranoid)."
+		"Please try rephrasing your question or using a different preset (e.g. llm-paranoid)."
 
 	return fallbackMsg
 }
@@ -242,7 +271,7 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 		return DebateResult{}, fmt.Errorf("critique phase failed: %w", err)
 	}
 
-	candidate := o.runSynthesizePhase(messages, drafts, critiques, transcript)
+	candidate := o.runSynthesizePhase(ctx, messages, drafts, critiques, transcript)
 
 	activeAgents := o.clientFactory.GetAllClients()
 	for round := 1; round <= maxRounds; round++ {
@@ -260,7 +289,7 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 		}
 		if round < maxRounds {
 			activeAgents = o.updateActiveAgents(votes)
-			candidate = o.runSynthesizePhase(messages, drafts, critiques, transcript)
+			candidate = o.runSelectiveRevisePhase(ctx, candidate, result.Issues, activeAgents, transcript, messages)
 		}
 	}
 
