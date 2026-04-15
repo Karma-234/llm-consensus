@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -36,6 +37,21 @@ type Preset struct {
 	MaxRounds       int    `yaml:"max_rounds"`
 	StrictUnanimity bool   `yaml:"strict_unanimity"`
 	OutputMode      string `yaml:"output_mode"`
+}
+
+func (c *Config) GetPreset(modelName string) Preset {
+
+	name := strings.TrimPrefix(modelName, "llm-")
+	if preset, ok := c.Presets[name]; ok {
+		return preset
+	}
+
+	// Fallback to global defaults
+	return Preset{
+		MaxRounds:       c.Debate.MaxRounds,
+		StrictUnanimity: c.Debate.StrictUnanimity,
+		OutputMode:      c.Output.DefaultMode,
+	}
 }
 
 func LoadConfig(path string) (*Config, error) {

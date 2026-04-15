@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -216,12 +217,20 @@ func (o *Orchestrator) fallbackToBestCandidate(candidate string, transcript *Tra
 	if candidate != "" && candidate != "Synthesis failed." {
 		return candidate
 	}
-	return "The agents were unable to reach consensus on this query. Please try rephrasing or using a different preset."
+	fallbackMsg := "The agents were unable to reach consensus on this query. " +
+		"Please try rephrasing your question or using a different preset (e.g. zettai-paranoid)."
+
+	transcript.SetFinalAnswer(fallbackMsg)
+	return fallbackMsg
 }
 
-func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message) (DebateResult, error) {
+func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, modelName string) (DebateResult, error) {
 	start := time.Now()
-	maxRound := o.cfg.Debate.MaxRounds
+	preset := o.resolvePreset(modelName)
+
+	maxRounds := preset.MaxRounds
+	strictUnanimity := preset.StrictUnanimity
+	outputMode := preset.OutputMode
 	transcript := NewTranscript(messages)
 
 	drafts, err := o.runDraftPhase(ctx, messages, transcript)
@@ -237,24 +246,20 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message) 
 	candidate := o.runSynthesizePhase(messages, drafts, critiques, transcript)
 
 	activeAgents := o.clientFactory.GetAllClients()
-	for round := 1; round <= maxRound; round++ {
+	for round := 1; round <= maxRounds; round++ {
 		votes, err := o.runSelectiveVotingPhase(ctx, messages, activeAgents, candidate, transcript)
 		if err != nil {
 			return DebateResult{}, fmt.Errorf("voting phase failed: %w", err)
 		}
-		result := EvaluateConsensus(votes, o.cfg.Debate.StrictUnanimity)
+		result := EvaluateConsensus(votes, strictUnanimity)
 		transcript.AddVotingRound(round, votes, result.Issues)
 		activeAgents = o.updateActiveAgents(votes)
 		if result.ConsensusReached {
-			return DebateResult{
-				FinalAnswer: candidate,
-				Transcript:  transcript,
-			}, nil
+			log.Printf("Consensus reached in %d rounds with preset '%s' (%v)", round, modelName, time.Since(start))
+			transcript.SetFinalAnswer(candidate)
+			return o.buildResult(candidate, transcript, outputMode), nil
 		}
-		if len(activeAgents) == 0 {
-			break
-		}
-		if round < maxRound {
+		if round < maxRounds {
 			activeAgents = o.updateActiveAgents(votes)
 			candidate = o.runSynthesizePhase(messages, drafts, critiques, transcript)
 		}
@@ -268,4 +273,26 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message) 
 		FinalAnswer: finalAnswer,
 		Transcript:  transcript,
 	}, nil
+}
+func (o *Orchestrator) resolvePreset(modelName string) config.Preset {
+
+	name := strings.TrimPrefix(modelName, "llm-")
+	if preset, ok := o.cfg.Presets[name]; ok {
+		return preset
+	}
+
+	return config.Preset{
+		MaxRounds:       o.cfg.Debate.MaxRounds,
+		StrictUnanimity: o.cfg.Debate.StrictUnanimity,
+		OutputMode:      o.cfg.Output.DefaultMode,
+	}
+}
+func (o *Orchestrator) buildResult(answer string, transcript *Transcript, mode string) DebateResult {
+	if mode == "debug" {
+		return DebateResult{FinalAnswer: transcript.ToCleanSummary(), Transcript: transcript}
+	}
+	if mode == "audit" {
+		return DebateResult{FinalAnswer: transcript.ToJSON(), Transcript: transcript}
+	}
+	return DebateResult{FinalAnswer: answer, Transcript: transcript}
 }

@@ -46,17 +46,17 @@ virtual_models:
 
 presets:
   fast:
-    debate:
-      max_rounds: 1
-      strict_unanimity: false
+    max_rounds: 1
+    strict_unanimity: false
+    output_mode: clean
   balanced:
-    debate:
-      max_rounds: 2
-      strict_unanimity: true
+    max_rounds: 2
+    strict_unanimity: true
+    output_mode: clean
   paranoid:
-    debate:
-      max_rounds: 4
-      strict_unanimity: true
+    max_rounds: 4
+    strict_unanimity: true
+    output_mode: clean
   debug:
     output:
       default_mode: debug
