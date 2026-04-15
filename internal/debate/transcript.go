@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/karma-234/llm-consensus/internal/types"
@@ -15,6 +16,7 @@ type Transcript struct {
 	TotalDuration    string          `json:"total_duration,omitempty"`
 	MetaData         map[string]any  `json:"meta_data,omitempty"`
 	Phases           []Phase         `json:"phases"`
+	mu               sync.RWMutex    `json:"-"`
 }
 type Phase struct {
 	Name      string         `json:"name"`
@@ -31,6 +33,8 @@ func NewTranscript(messages []types.Message) *Transcript {
 }
 
 func (t *Transcript) addPhase(name string, data map[string]any) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.Phases = append(t.Phases, Phase{
 		Name:      name,
 		Timestamp: getCurrentTimestamp(),
@@ -94,6 +98,8 @@ func (t *Transcript) AddRevision(agentName, newContent string, issues []string) 
 }
 
 func (t *Transcript) SetFinalAnswer(answer string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.FinalAnswer = answer
 }
 
@@ -103,6 +109,8 @@ func getCurrentTimestamp() string {
 }
 
 func (t *Transcript) ToJSON() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	data := map[string]any{
 		"original_messages": t.OriginalMessages,
 		"phases":            t.Phases,
@@ -119,6 +127,8 @@ func (t *Transcript) ToJSON() string {
 }
 
 func (t *Transcript) ToCleanSummary() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	var sb strings.Builder
 
 	sb.WriteString("=== LLM-Consensus Debate Transcript ===\n\n")

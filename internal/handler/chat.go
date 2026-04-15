@@ -37,23 +37,29 @@ type ChatCompletionResponse struct {
 	} `json:"choices"`
 }
 
+func writeJSONError(w http.ResponseWriter, statusCode int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
 // HandleChatCompletions routes to streaming or normal handler
 func HandleChatCompletions(w http.ResponseWriter, r *http.Request, cfg *config.Config) {
 	var req ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error": "invalid json request"}`, http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "invalid json request")
 		return
 	}
 
 	if len(req.Messages) == 0 {
-		http.Error(w, `{"error": "no messages provided"}`, http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "no messages provided")
 		return
 	}
 
 	factory, err := provider.NewClientFactory(cfg)
 	if err != nil {
 		log.Printf("Failed to create provider factory: %v", err)
-		http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -72,7 +78,7 @@ func handleNormal(w http.ResponseWriter, r *http.Request, orchestrator *debate.O
 	result, err := orchestrator.RunDebate(r.Context(), req.Messages, req.Model)
 	if err != nil {
 		log.Printf("Debate failed: %v", err)
-		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

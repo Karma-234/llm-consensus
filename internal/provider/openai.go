@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/karma-234/llm-consensus/internal/config"
 	"github.com/karma-234/llm-consensus/internal/types"
@@ -37,6 +38,9 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req types.ChatRequest
 	resp, err := c.client.CreateChatCompletion(ctx, openAIReq)
 	if err != nil {
 		return types.ChatResponse{}, err
+	}
+	if len(resp.Choices) == 0 {
+		return types.ChatResponse{}, fmt.Errorf("openai returned no choices")
 	}
 
 	return types.ChatResponse{

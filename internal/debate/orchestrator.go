@@ -288,7 +288,6 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 			return o.buildResult(candidate, transcript, outputMode), nil
 		}
 		if round < maxRounds {
-			activeAgents = o.updateActiveAgents(votes)
 			candidate = o.runSelectiveRevisePhase(ctx, candidate, result.Issues, activeAgents, transcript, messages)
 		}
 	}

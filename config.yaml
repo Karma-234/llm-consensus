@@ -39,10 +39,10 @@ output:
 virtual_models:
   default: llm-consensus
   presets:
-    llm-fast: fast
-    llm-balanced: balanced
-    llm-paranoid: paranoid
-    llm-debug: debug
+    llm-consensus-fast: fast
+    llm-consensus-balanced: balanced
+    llm-consensus-paranoid: paranoid
+    llm-consensus-debug: debug
 
 presets:
   fast:
@@ -58,7 +58,6 @@ presets:
     strict_unanimity: true
     output_mode: clean
   debug:
-    output:
-      default_mode: debug
-    debate:
-      stream_internal: true
+    max_rounds: 3
+    strict_unanimity: false
+    output_mode: debug

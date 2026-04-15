@@ -28,7 +28,7 @@ func NewAnthropicClient(agent config.Agent) (*AnthropicClient, error) {
 }
 
 func (c *AnthropicClient) ChatCompletion(ctx context.Context, req types.ChatRequest) (types.ChatResponse, error) {
-	requestBody := convertToAnthropicRequest(req)
+	requestBody := convertToAnthropicRequest(req, c.model)
 
 	body, err := json.Marshal(requestBody)
 	if err != nil {
@@ -97,10 +97,14 @@ type anthropicContentBlock struct {
 	Content string `json:"content"`
 }
 
-func convertToAnthropicRequest(req types.ChatRequest) anthropicRequest {
+func convertToAnthropicRequest(req types.ChatRequest, fallbackModel string) anthropicRequest {
 	anthropicMessages := convertMessagesToAnthropicFormat(req.Messages)
+	model := req.Model
+	if model == "" {
+		model = fallbackModel
+	}
 	return anthropicRequest{
-		Model:       req.Model,
+		Model:       model,
 		Messages:    anthropicMessages,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,

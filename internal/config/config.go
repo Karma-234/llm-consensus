@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -18,8 +19,9 @@ type Config struct {
 		StrictUnanimity    bool `yaml:"strict_unanimity"`
 		FallbackOnDeadlock bool `yaml:"fallback_on_deadlock"`
 	} `yaml:"debate"`
-	Presets map[string]Preset `yaml:"presets"`
-	Output  struct {
+	Presets       map[string]Preset `yaml:"presets"`
+	VirtualModels VirtualModels     `yaml:"virtual_models"`
+	Output        struct {
 		DefaultMode string `yaml:"default_mode"`
 	} `yaml:"output"`
 }
@@ -33,6 +35,11 @@ type Agent struct {
 	BaseURL  string `yaml:"base_url,omitempty"`
 }
 
+type VirtualModels struct {
+	Default string            `yaml:"default"`
+	Presets map[string]string `yaml:"presets"`
+}
+
 type Preset struct {
 	MaxRounds       int    `yaml:"max_rounds"`
 	StrictUnanimity bool   `yaml:"strict_unanimity"`
@@ -40,6 +47,11 @@ type Preset struct {
 }
 
 func (c *Config) GetPreset(modelName string) Preset {
+	if presetName, ok := c.VirtualModels.Presets[modelName]; ok {
+		if preset, found := c.Presets[presetName]; found {
+			return preset
+		}
+	}
 
 	name := strings.TrimPrefix(modelName, "llm-")
 	if preset, ok := c.Presets[name]; ok {
@@ -54,14 +66,30 @@ func (c *Config) GetPreset(modelName string) Preset {
 	}
 }
 
+func (c *Config) ValidatePresets() error {
+	for name, preset := range c.Presets {
+		if preset.MaxRounds <= 0 {
+			return fmt.Errorf("preset '%s': max_rounds must be greater than 0, got %d", name, preset.MaxRounds)
+		}
+		if preset.OutputMode == "" {
+			return fmt.Errorf("preset '%s': output_mode must be non-empty", name)
+		}
+	}
+	return nil
+}
+
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	expanded := os.ExpandEnv(string(data))
 	var cfg Config
-	err = yaml.Unmarshal(data, &cfg)
+	err = yaml.Unmarshal([]byte(expanded), &cfg)
 	if err != nil {
+		return nil, err
+	}
+	if err := cfg.ValidatePresets(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil

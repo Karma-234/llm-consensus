@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/karma-234/llm-consensus/internal/config"
 	"github.com/karma-234/llm-consensus/internal/handler"
@@ -45,8 +47,10 @@ func main() {
 		}
 	}()
 	<-done
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	log.Println("Shutting down server...")
-	if err := newServer.Close(); err != nil {
+	if err := newServer.Shutdown(ctx); err != nil {
 		log.Fatalf("Failed to shut down server: %v", err)
 	}
 	log.Println("Server stopped gracefully")
