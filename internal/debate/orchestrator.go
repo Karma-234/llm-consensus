@@ -213,14 +213,13 @@ func (o *Orchestrator) runSynthesizePhase(messages []types.Message, drafts, crit
 	return synthesized
 }
 
-func (o *Orchestrator) fallbackToBestCandidate(candidate string, transcript *Transcript) string {
+func (o *Orchestrator) fallbackToBestCandidate(candidate string) string {
 	if candidate != "" && candidate != "Synthesis failed." {
 		return candidate
 	}
 	fallbackMsg := "The agents were unable to reach consensus on this query. " +
 		"Please try rephrasing your question or using a different preset (e.g. zettai-paranoid)."
 
-	transcript.SetFinalAnswer(fallbackMsg)
 	return fallbackMsg
 }
 
@@ -265,7 +264,7 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 		}
 	}
 
-	finalAnswer := o.fallbackToBestCandidate(candidate, transcript)
+	finalAnswer := o.fallbackToBestCandidate(candidate)
 	log.Printf("Debate ended with fallback after %v", time.Since(start))
 
 	transcript.SetFinalAnswer(finalAnswer)
