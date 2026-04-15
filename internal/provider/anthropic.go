@@ -14,16 +14,20 @@ import (
 )
 
 type AnthropicClient struct {
-	model  string
-	client *http.Client
-	APIKey string
+	model    string
+	client   *http.Client
+	APIKey   string
+	endpoint string
 }
+
+const anthropicMessagesURL = "https://api.anthropic.com/v1/messages"
 
 func NewAnthropicClient(agent config.Agent) (*AnthropicClient, error) {
 	return &AnthropicClient{
-		model:  agent.Model,
-		client: &http.Client{Timeout: 5 * time.Minute},
-		APIKey: agent.APIKey,
+		model:    agent.Model,
+		client:   &http.Client{Timeout: 5 * time.Minute},
+		APIKey:   agent.APIKey,
+		endpoint: anthropicMessagesURL,
 	}, nil
 }
 
@@ -35,7 +39,7 @@ func (c *AnthropicClient) ChatCompletion(ctx context.Context, req types.ChatRequ
 		return types.ChatResponse{}, fmt.Errorf("Failed to marshal request: %s", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, bytes.NewBuffer(body))
 	if err != nil {
 		return types.ChatResponse{}, fmt.Errorf("Failed to create HTTP request: %s", err)
 	}
@@ -64,8 +68,11 @@ func (c *AnthropicClient) ChatCompletion(ctx context.Context, req types.ChatRequ
 	var fullContent strings.Builder
 	for _, block := range anthropicResp.Content {
 		if block.Type == "text" {
-			fullContent.WriteString(block.Content)
+			fullContent.WriteString(block.Text)
 		}
+	}
+	if fullContent.Len() == 0 {
+		return types.ChatResponse{}, fmt.Errorf("Empty response content")
 	}
 
 	return types.ChatResponse{
@@ -93,8 +100,8 @@ type anthropicResponse struct {
 }
 
 type anthropicContentBlock struct {
-	Type    string `json:"type"` // "text", "image", etc.
-	Content string `json:"content"`
+	Type string `json:"type"` // "text", "image", etc.
+	Text string `json:"text"`
 }
 
 func convertToAnthropicRequest(req types.ChatRequest, fallbackModel string) anthropicRequest {

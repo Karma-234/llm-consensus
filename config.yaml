@@ -31,7 +31,6 @@ agents:
 debate:
   max_rounds: 3
   strict_unanimity: false
-  fallback_on_deadlock: true
 
 output:
   default_mode: debug

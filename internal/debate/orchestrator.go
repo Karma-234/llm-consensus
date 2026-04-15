@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -302,17 +301,7 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 	}, nil
 }
 func (o *Orchestrator) resolvePreset(modelName string) config.Preset {
-
-	name := strings.TrimPrefix(modelName, "llm-")
-	if preset, ok := o.cfg.Presets[name]; ok {
-		return preset
-	}
-
-	return config.Preset{
-		MaxRounds:       o.cfg.Debate.MaxRounds,
-		StrictUnanimity: o.cfg.Debate.StrictUnanimity,
-		OutputMode:      o.cfg.Output.DefaultMode,
-	}
+	return o.cfg.GetPreset(modelName)
 }
 func (o *Orchestrator) buildResult(answer string, transcript *Transcript, mode string) DebateResult {
 	if mode == "debug" {

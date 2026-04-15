@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/karma-234/llm-consensus/internal/config"
 	"github.com/karma-234/llm-consensus/internal/types"
@@ -47,5 +48,6 @@ func (f *ClientFactory) GetAllClients() []string {
 	for name := range f.clients {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }

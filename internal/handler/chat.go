@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,6 +14,12 @@ import (
 	"github.com/karma-234/llm-consensus/internal/provider"
 	"github.com/karma-234/llm-consensus/internal/types"
 )
+
+const consensusInternalErrorMessage = "consensus computation failed"
+
+var runDebate = func(orchestrator *debate.Orchestrator, ctx context.Context, messages []types.Message, model string) (debate.DebateResult, error) {
+	return orchestrator.RunDebate(ctx, messages, model)
+}
 
 // ChatCompletionRequest is the incoming OpenAI-compatible request
 type ChatCompletionRequest struct {
@@ -75,10 +82,10 @@ func HandleChatCompletions(w http.ResponseWriter, r *http.Request, cfg *config.C
 
 // Normal (non-streaming) response
 func handleNormal(w http.ResponseWriter, r *http.Request, orchestrator *debate.Orchestrator, req ChatCompletionRequest) {
-	result, err := orchestrator.RunDebate(r.Context(), req.Messages, req.Model)
+	result, err := runDebate(orchestrator, r.Context(), req.Messages, req.Model)
 	if err != nil {
 		log.Printf("Debate failed: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		writeJSONError(w, http.StatusInternalServerError, consensusInternalErrorMessage)
 		return
 	}
 
@@ -104,9 +111,10 @@ func handleStreaming(w http.ResponseWriter, r *http.Request, orchestrator *debat
 	}
 
 	// Run the full debate (we still need to compute the consensus first)
-	result, err := orchestrator.RunDebate(r.Context(), req.Messages, req.Model)
+	result, err := runDebate(orchestrator, r.Context(), req.Messages, req.Model)
 	if err != nil {
-		sendErrorEvent(w, flusher, err.Error())
+		log.Printf("Debate failed: %v", err)
+		sendErrorEvent(w, flusher, consensusInternalErrorMessage)
 		return
 	}
 
@@ -156,7 +164,10 @@ func handleStreaming(w http.ResponseWriter, r *http.Request, orchestrator *debat
 		},
 	}
 
-	sendSSEEvent(w, flusher, doneChunk)
+	if err := sendSSEEvent(w, flusher, doneChunk); err != nil {
+		return
+	}
+	_ = sendSSEDone(w, flusher)
 }
 
 // Helper to send SSE event
@@ -167,6 +178,14 @@ func sendSSEEvent(w http.ResponseWriter, flusher http.Flusher, data map[string]a
 	}
 
 	fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	flusher.Flush()
+	return nil
+}
+
+func sendSSEDone(w http.ResponseWriter, flusher http.Flusher) error {
+	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
+		return err
+	}
 	flusher.Flush()
 	return nil
 }

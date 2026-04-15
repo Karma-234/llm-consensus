@@ -15,9 +15,8 @@ type Config struct {
 	} `yaml:"server"`
 	Agents []Agent `yaml:"agents"`
 	Debate struct {
-		MaxRounds          int  `yaml:"max_rounds"`
-		StrictUnanimity    bool `yaml:"strict_unanimity"`
-		FallbackOnDeadlock bool `yaml:"fallback_on_deadlock"`
+		MaxRounds       int  `yaml:"max_rounds"`
+		StrictUnanimity bool `yaml:"strict_unanimity"`
 	} `yaml:"debate"`
 	Presets       map[string]Preset `yaml:"presets"`
 	VirtualModels VirtualModels     `yaml:"virtual_models"`
