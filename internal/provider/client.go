@@ -22,9 +22,9 @@ type ClientFactory struct {
 	clients map[string]types.LLMClient
 }
 
-func NewClientFactory(agents []config.Agent) (*ClientFactory, error) {
+func NewClientFactory(cfg *config.Config) (*ClientFactory, error) {
 	factory := &ClientFactory{clients: make(map[string]types.LLMClient)}
-	for _, agent := range agents {
+	for _, agent := range cfg.Agents {
 		client, err := NewChatClient(agent)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create client for agent %s: %w", agent.Name, err)
