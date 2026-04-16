@@ -54,7 +54,11 @@ func (c *AnthropicClient) ChatCompletion(ctx context.Context, req types.ChatRequ
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return types.ChatResponse{}, fmt.Errorf("Non-200 response: %d", resp.StatusCode)
+		var errResp map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+			return types.ChatResponse{}, fmt.Errorf("Non-200 response: %d\nFailed to decode error response: %s", resp.StatusCode, err)
+		}
+		return types.ChatResponse{}, fmt.Errorf("Non-200 response: %d\nError: %v", resp.StatusCode, errResp)
 	}
 
 	var anthropicResp anthropicResponse
