@@ -143,7 +143,7 @@ func (p *DebatePrompt) RevisePrompt(messages []types.Message, candidate string, 
 
 func extractUserQuery(messages []types.Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
+		if messages[i].Role == types.RoleUser {
 			return messages[i].Content
 		}
 	}

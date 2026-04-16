@@ -126,11 +126,11 @@ func convertMessagesToAnthropicFormat(messages []types.Message) []anthropicMessa
 	anthropicMessages := make([]anthropicMessage, len(messages))
 	for i, msg := range messages {
 		role := msg.Role
-		if msg.Role == "system" {
-			role = "user"
+		if msg.Role == types.RoleSystem {
+			role = types.RoleUser
 		}
 		anthropicMessages[i] = anthropicMessage{
-			Role:    role,
+			Role:    string(role),
 			Content: msg.Content,
 		}
 	}

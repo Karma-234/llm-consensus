@@ -52,7 +52,7 @@ func convertToOpenAIMessages(messages []types.Message) []openai.ChatCompletionMe
 	openAIMessages := make([]openai.ChatCompletionMessage, len(messages))
 	for i, msg := range messages {
 		openAIMessages[i] = openai.ChatCompletionMessage{
-			Role:    msg.Role,
+			Role:    string(msg.Role),
 			Content: msg.Content,
 		}
 	}

@@ -53,7 +53,7 @@ func (o *Orchestrator) runDraftPhase(ctx context.Context, messages []types.Messa
 			prompt := o.prompt.DraftPrompt(agentName, messages)
 			resp, err := client.ChatCompletion(ctx, types.ChatRequest{
 				Messages: []types.Message{
-					{Role: "system", Content: prompt},
+					{Role: types.RoleSystem, Content: prompt},
 				},
 			})
 			if err != nil {
@@ -98,7 +98,7 @@ func (o *Orchestrator) runCritiquePhase(ctx context.Context, messages []types.Me
 			prompt := o.prompt.CritiquePrompt(messages, drafts, agentName)
 			resp, err := client.ChatCompletion(ctx, types.ChatRequest{
 				Messages: []types.Message{
-					{Role: "user", Content: prompt},
+					{Role: types.RoleUser, Content: prompt},
 				},
 				Temperature: 0.7,
 			})
@@ -143,7 +143,7 @@ func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []t
 			prompt := o.prompt.VotePrompt(messages, candidate, name)
 			resp, err := client.ChatCompletion(ctx, types.ChatRequest{
 				Messages: []types.Message{
-					{Role: "user", Content: prompt},
+					{Role: types.RoleUser, Content: prompt},
 				},
 				Temperature: 0.0,
 			})
@@ -187,7 +187,7 @@ func (o *Orchestrator) runSelectiveRevisePhase(ctx context.Context, candidate st
 	prompt := o.prompt.RevisePrompt(messages, candidate, issues)
 
 	resp, err := client.ChatCompletion(ctx, types.ChatRequest{
-		Messages:    []types.Message{{Role: "user", Content: prompt}},
+		Messages:    []types.Message{{Role: types.RoleUser, Content: prompt}},
 		Temperature: 0.6,
 	})
 	if err != nil {
@@ -228,7 +228,7 @@ func (o *Orchestrator) runSynthesizePhase(ctx context.Context, messages []types.
 
 	client, _ := o.clientFactory.GetClient(agents[0])
 	resp, err := client.ChatCompletion(ctx, types.ChatRequest{
-		Messages:    []types.Message{{Role: "user", Content: prompt}},
+		Messages:    []types.Message{{Role: types.RoleUser, Content: prompt}},
 		Temperature: 0.5,
 	})
 	if err != nil {

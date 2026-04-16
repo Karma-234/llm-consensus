@@ -54,12 +54,17 @@ func writeJSONError(w http.ResponseWriter, statusCode int, message string) {
 func HandleChatCompletions(w http.ResponseWriter, r *http.Request, cfg *config.Config) {
 	var req ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid json request")
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid json request: %s", err.Error()))
 		return
 	}
 
 	if len(req.Messages) == 0 {
 		writeJSONError(w, http.StatusBadRequest, "no messages provided")
+		return
+	}
+
+	if err := validateMessages(req.Messages); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -218,13 +223,25 @@ func buildOpenAIResponse(model, content string) ChatCompletionResponse {
 					Role    string `json:"role"`
 					Content string `json:"content"`
 				}{
-					Role:    "assistant",
+					Role:    string(types.RoleAssistant),
 					Content: content,
 				},
 				FinishReason: "stop",
 			},
 		},
 	}
+}
+
+func validateMessages(messages []types.Message) error {
+	for i, msg := range messages {
+		if !msg.Role.IsValid() {
+			return fmt.Errorf("invalid role at messages[%d]", i)
+		}
+		if strings.TrimSpace(msg.Content) == "" {
+			return fmt.Errorf("blank content at messages[%d]", i)
+		}
+	}
+	return nil
 }
 
 // HandleModels returns available models (including presets)
