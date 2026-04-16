@@ -4,7 +4,7 @@ Multi-agent debate orchestration behind an OpenAI-compatible chat endpoint.
 
 LLM-Consensus fans a request out to multiple agents, runs a structured debate loop (draft, critique, synthesize, vote, revise), and returns one final response.
 
-It aims to improve deep reasoning and reduce hallucinations which are some of the tradeoffs with RAG. 
+It aims to improve answer quality and reasoning via multi-agent critique and voting. It can reduce some hallucinations from single-pass generation, but it is complementary to RAG rather than a replacement for retrieval-grounded answers. 
 
 ## How It Works
 
