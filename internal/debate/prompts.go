@@ -103,16 +103,38 @@ func (p *DebatePrompt) VotePrompt(messages []types.Message, candidate string, ag
 
 						Your task: Carefully evaluate the candidate answer above.
 
-						Vote by responding with valid JSON only (no other text):
+RESPOND WITH VALID JSON ONLY. Do not include any other text, markdown, code fences, or commentary.
 
-						{
-						"approve": true or false,
-						"confidence": number between 0.0 and 1.0,
-						"blocking_issues": ["list of specific problems that must be fixed before you can approve"],
-						"suggestions": ["optional list of improvement suggestions"]
-						}
+The JSON must have this exact structure:
+- "approve": MUST be true or false (boolean, not string)
+- "confidence": MUST be a number between 0.0 and 1.0
+- "blocking_issues": MUST be an array of strings (["issue1", "issue2"]), NEVER a boolean
+- "suggestions": MUST be an array of strings (["suggestion1", "suggestion2"]), can be empty
 
-						Be honest and rigorous. Only set "approve": true if the answer is excellent and free of major issues.`, agentName, userQuery, candidate)
+Example of CORRECT JSON:
+{
+  "approve": true,
+  "confidence": 0.85,
+  "blocking_issues": ["missing citation", "unclear methodology"],
+  "suggestions": ["add references", "clarify steps"]
+}
+
+Example of INCORRECT JSON (do not do this):
+{
+  "approve": "true",
+  "confidence": "0.85",
+  "blocking_issues": true,
+  "suggestions": "add more detail"
+}
+
+CRITICAL RULES:
+1. blocking_issues MUST be an array of strings. If there are no blocking issues, use empty array: []
+2. Never return blocking_issues as a boolean, string, or single value
+3. All four fields (approve, confidence, blocking_issues, suggestions) must be present
+4. Do not include markdown, backticks, or explanatory text
+5. Output only the JSON object, nothing else
+
+Be honest and rigorous. Only set "approve": true if the answer is excellent and free of major issues.`, agentName, userQuery, candidate)
 }
 
 func (p *DebatePrompt) RevisePrompt(messages []types.Message, candidate string, issues []string) string {
