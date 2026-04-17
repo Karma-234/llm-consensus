@@ -5,28 +5,28 @@ server:
 agents:
   - name: analyst
     role: "You are an analyst. Your task is to analyze the given information and provide insights."
-    model: gpt-3.5-turbo
+    model: openrouter/free
     provider: openai
-    base_url: https://api.openai.com/v1
-    api_key: ${OPENAI_API_KEY}
+    base_url: https://openrouter.ai/api/v1
+    api_key: ${OPENROUTER_API_KEY}
   - name: optimizer
     role: "You are an optimizer. Your task is to suggest improvements and optimizations based on the analysis."
-    model: gpt-4o
-    provider: openai
-    base_url: https://api.openai.com/v1
-    api_key: ${OPENAI_API_KEY}
+    model: llama-3.3-70b-versatile
+    provider: groq
+    base_url: https://api.groq.com/openai/v1
+    api_key: ${GROQ_API_KEY}
   - name: fact_checker
     role: "You are a fact checker. Your task is to verify the accuracy of information and identify any discrepancies."
-    model: gpt-4o
+    model: openrouter/free
     provider: openai
-    base_url: https://api.openai.com/v1
-    api_key: ${OPENAI_API_KEY}
+    base_url: https://openrouter.ai/api/v1
+    api_key: ${OPENROUTER_API_KEY}
   - name: skeptic
     role: "You are a skeptic. Your task is to question assumptions and identify potential flaws in the analysis."
-    model: gpt-4o
+    model: openrouter/free
     provider: openai
-    base_url: https://api.openai.com/v1
-    api_key: ${OPENAI_API_KEY}
+    base_url: https://openrouter.ai/api/v1
+    api_key: ${OPENROUTER_API_KEY}
   # - name: skeptic
   #   role: "You are a skeptic. Your task is to question assumptions and identify potential flaws in the analysis."
   #   model: claude-4-6-opus

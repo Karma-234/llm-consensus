@@ -3,6 +3,7 @@ package debate
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type Vote struct {
@@ -13,8 +14,13 @@ type Vote struct {
 }
 
 func ParseVoteResponse(content string) (Vote, error) {
+	cleanedContent := strings.TrimSpace(content)
+	cleanedContent = strings.TrimPrefix(cleanedContent, "```json")
+	cleanedContent = strings.TrimPrefix(cleanedContent, "```")
+	cleanedContent = strings.TrimSuffix(cleanedContent, "```")
+	cleanedContent = strings.TrimSpace(cleanedContent)
 	var vote Vote
-	if err := json.Unmarshal([]byte(content), &vote); err != nil {
+	if err := json.Unmarshal([]byte(cleanedContent), &vote); err != nil {
 		return Vote{}, fmt.Errorf("Failed to parse vote response: %s", err)
 	}
 	if vote.Confidence < 0 {
