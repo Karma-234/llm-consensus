@@ -4,7 +4,7 @@ Multi-agent debate orchestration behind an OpenAI-compatible chat endpoint.
 
 LLM-Consensus fans a request out to multiple agents, runs a structured debate loop (draft, critique, synthesize, vote, revise), and returns one final response.
 
-It aims to improve answer quality and reasoning via multi-agent critique and voting. It can reduce some hallucinations from single-pass generation, but it is complementary to RAG rather than a replacement for retrieval-grounded answers. 
+It aims to improve answer quality and reasoning via multi-agent critique and voting. It can reduce some hallucinations from single-pass generation, but it is complementary to RAG rather than a replacement for retrieval-grounded answers.
 
 ## How It Works
 
@@ -124,7 +124,7 @@ Basic liveness check.
 Response:
 
 ```json
-{"status":"ok"}
+{ "status": "ok" }
 ```
 
 ### GET /v1/models
@@ -183,13 +183,13 @@ data: [DONE]
 
 **Event types:**
 
-| Event | When emitted | Payload |
-|---|---|---|
-| `stage_start` | Immediately before each debate phase begins | `phase` name |
-| `stage_complete` | After each phase completes | `phase` name + `usage` counters |
-| `answer_chunk` | Each word of the final answer | `index`, `delta.content`, optional `finish_reason` |
-| `usage_summary` | After all answer chunks | `total`, `per_phase`, `per_agent` token counts |
-| `error` (terminating) | On fatal debate failure | `message` (sanitized), followed by `[DONE]` |
+| Event                 | When emitted                                | Payload                                            |
+| --------------------- | ------------------------------------------- | -------------------------------------------------- |
+| `stage_start`         | Immediately before each debate phase begins | `phase` name                                       |
+| `stage_complete`      | After each phase completes                  | `phase` name + `usage` counters                    |
+| `answer_chunk`        | Each word of the final answer               | `index`, `delta.content`, optional `finish_reason` |
+| `usage_summary`       | After all answer chunks                     | `total`, `per_phase`, `per_agent` token counts     |
+| `error` (terminating) | On fatal debate failure                     | `message` (sanitized), followed by `[DONE]`        |
 
 Terminal marker:
 
