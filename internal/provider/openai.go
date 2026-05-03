@@ -45,6 +45,11 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req types.ChatRequest
 
 	return types.ChatResponse{
 		Content: resp.Choices[0].Message.Content,
+		Usage: types.Usage{
+			PromptTokens:     resp.Usage.PromptTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+		},
 	}, nil
 }
 

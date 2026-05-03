@@ -30,9 +30,59 @@ func NewOrchestrator(cfg *config.Config, clientFactory *provider.ClientFactory) 
 type DebateResult struct {
 	FinalAnswer string
 	Transcript  *Transcript
+	Usage       types.UsageReport
 }
 
-func (o *Orchestrator) runDraftPhase(ctx context.Context, messages []types.Message, transcript *Transcript) (map[string]string, error) {
+// usageAccumulator collects per-call AgentUsage records concurrently
+// and can produce a UsageReport at the end of the debate.
+type usageAccumulator struct {
+	mu      sync.Mutex
+	records []types.AgentUsage
+}
+
+func (a *usageAccumulator) add(agent, phase string, u types.Usage) {
+	a.mu.Lock()
+	a.records = append(a.records, types.AgentUsage{Agent: agent, Phase: phase, Usage: u})
+	a.mu.Unlock()
+}
+
+func (a *usageAccumulator) report() types.UsageReport {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	var total types.Usage
+	phaseMap := make(map[string]*types.Usage)
+
+	for _, r := range a.records {
+		total.PromptTokens += r.Usage.PromptTokens
+		total.CompletionTokens += r.Usage.CompletionTokens
+		total.TotalTokens += r.Usage.TotalTokens
+
+		if phaseMap[r.Phase] == nil {
+			phaseMap[r.Phase] = &types.Usage{}
+		}
+		phaseMap[r.Phase].PromptTokens += r.Usage.PromptTokens
+		phaseMap[r.Phase].CompletionTokens += r.Usage.CompletionTokens
+		phaseMap[r.Phase].TotalTokens += r.Usage.TotalTokens
+	}
+
+	// Stable ordered phases for consistent output.
+	phaseOrder := []string{"draft", "critique", "synthesize", "vote", "revise"}
+	var perPhase []types.PhaseUsage
+	for _, ph := range phaseOrder {
+		if u, ok := phaseMap[ph]; ok {
+			perPhase = append(perPhase, types.PhaseUsage{Phase: ph, Usage: *u})
+		}
+	}
+
+	return types.UsageReport{
+		Total:    total,
+		PerPhase: perPhase,
+		PerAgent: append([]types.AgentUsage(nil), a.records...),
+	}
+}
+
+func (o *Orchestrator) runDraftPhase(ctx context.Context, messages []types.Message, transcript *Transcript, acc *usageAccumulator) (map[string]string, error) {
 	agentNames := o.clientFactory.GetAllClients()
 	drafts := make(map[string]string)
 
@@ -63,6 +113,7 @@ func (o *Orchestrator) runDraftPhase(ctx context.Context, messages []types.Messa
 			mu.Lock()
 			drafts[agentName] = resp.Content
 			transcript.AddDraftPhase(agentName, resp.Content)
+			acc.add(agentName, "draft", resp.Usage)
 			mu.Unlock()
 
 		}(name)
@@ -77,7 +128,7 @@ func (o *Orchestrator) runDraftPhase(ctx context.Context, messages []types.Messa
 	return drafts, nil
 }
 
-func (o *Orchestrator) runCritiquePhase(ctx context.Context, messages []types.Message, drafts map[string]string, transcript *Transcript) (map[string]string, error) {
+func (o *Orchestrator) runCritiquePhase(ctx context.Context, messages []types.Message, drafts map[string]string, transcript *Transcript, acc *usageAccumulator) (map[string]string, error) {
 	agentNames := o.clientFactory.GetAllClients()
 	critiques := make(map[string]string)
 
@@ -109,6 +160,7 @@ func (o *Orchestrator) runCritiquePhase(ctx context.Context, messages []types.Me
 			mu.Lock()
 			critiques[agentName] = resp.Content
 			transcript.AddCritiquePhase(agentName, resp.Content)
+			acc.add(agentName, "critique", resp.Usage)
 			mu.Unlock()
 
 		}(name)
@@ -123,7 +175,7 @@ func (o *Orchestrator) runCritiquePhase(ctx context.Context, messages []types.Me
 	return critiques, nil
 }
 
-func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []types.Message, activeAgents []string, candidate string, transcript *Transcript) (map[string]Vote, error) {
+func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []types.Message, activeAgents []string, candidate string, transcript *Transcript, acc *usageAccumulator) (map[string]Vote, error) {
 	votes := make(map[string]Vote)
 
 	var mu sync.Mutex
@@ -159,6 +211,7 @@ func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []t
 			mu.Lock()
 			votes[agentName] = vote
 			transcript.AddVote(agentName, vote)
+			acc.add(agentName, "vote", resp.Usage)
 			mu.Unlock()
 
 		}(name)
@@ -172,7 +225,7 @@ func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []t
 
 	return votes, nil
 }
-func (o *Orchestrator) runSelectiveRevisePhase(ctx context.Context, candidate string, issues []string, activeAgents []string, transcript *Transcript, messages []types.Message) string {
+func (o *Orchestrator) runSelectiveRevisePhase(ctx context.Context, candidate string, issues []string, activeAgents []string, transcript *Transcript, messages []types.Message, acc *usageAccumulator) string {
 	if len(activeAgents) == 0 {
 		return candidate
 	}
@@ -196,6 +249,7 @@ func (o *Orchestrator) runSelectiveRevisePhase(ctx context.Context, candidate st
 	}
 
 	newCandidate := resp.Content
+	acc.add(reviseAgent, "revise", resp.Usage)
 	transcript.AddRevision(reviseAgent, newCandidate, issues)
 	log.Printf("Revised by %s", reviseAgent)
 
@@ -218,7 +272,7 @@ func (o *Orchestrator) updateActiveAgents(votes map[string]Vote) []string {
 	return active
 }
 
-func (o *Orchestrator) runSynthesizePhase(ctx context.Context, messages []types.Message, drafts, critiques map[string]string, transcript *Transcript) string {
+func (o *Orchestrator) runSynthesizePhase(ctx context.Context, messages []types.Message, drafts, critiques map[string]string, transcript *Transcript, acc *usageAccumulator) string {
 	prompt := o.prompt.SynthesizePrompt(messages, drafts, critiques)
 
 	agents := o.clientFactory.GetAllClients()
@@ -237,6 +291,7 @@ func (o *Orchestrator) runSynthesizePhase(ctx context.Context, messages []types.
 	}
 
 	synthesized := resp.Content
+	acc.add(agents[0], "synthesize", resp.Usage)
 	transcript.AddSynthesisPhase(synthesized)
 	return synthesized
 }
@@ -259,22 +314,23 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 	strictUnanimity := preset.StrictUnanimity
 	outputMode := preset.OutputMode
 	transcript := NewTranscript(messages)
+	acc := &usageAccumulator{}
 
-	drafts, err := o.runDraftPhase(ctx, messages, transcript)
+	drafts, err := o.runDraftPhase(ctx, messages, transcript, acc)
 	if err != nil {
 		return DebateResult{}, fmt.Errorf("draft phase failed: %w", err)
 	}
 
-	critiques, err := o.runCritiquePhase(ctx, messages, drafts, transcript)
+	critiques, err := o.runCritiquePhase(ctx, messages, drafts, transcript, acc)
 	if err != nil {
 		return DebateResult{}, fmt.Errorf("critique phase failed: %w", err)
 	}
 
-	candidate := o.runSynthesizePhase(ctx, messages, drafts, critiques, transcript)
+	candidate := o.runSynthesizePhase(ctx, messages, drafts, critiques, transcript, acc)
 
 	activeAgents := o.clientFactory.GetAllClients()
 	for round := 1; round <= maxRounds; round++ {
-		votes, err := o.runSelectiveVotingPhase(ctx, messages, activeAgents, candidate, transcript)
+		votes, err := o.runSelectiveVotingPhase(ctx, messages, activeAgents, candidate, transcript, acc)
 		if err != nil {
 			return DebateResult{}, fmt.Errorf("voting phase failed: %w", err)
 		}
@@ -284,10 +340,10 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 		if result.ConsensusReached {
 			log.Printf("Consensus reached in %d rounds with preset '%s' (%v)", round, modelName, time.Since(start))
 			transcript.SetFinalAnswer(candidate)
-			return o.buildResult(candidate, transcript, outputMode), nil
+			return o.buildResult(candidate, transcript, outputMode, acc.report()), nil
 		}
 		if round < maxRounds {
-			candidate = o.runSelectiveRevisePhase(ctx, candidate, result.Issues, activeAgents, transcript, messages)
+			candidate = o.runSelectiveRevisePhase(ctx, candidate, result.Issues, activeAgents, transcript, messages, acc)
 		}
 	}
 
@@ -298,17 +354,18 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 	return DebateResult{
 		FinalAnswer: finalAnswer,
 		Transcript:  transcript,
+		Usage:       acc.report(),
 	}, nil
 }
 func (o *Orchestrator) resolvePreset(modelName string) config.Preset {
 	return o.cfg.GetPreset(modelName)
 }
-func (o *Orchestrator) buildResult(answer string, transcript *Transcript, mode string) DebateResult {
+func (o *Orchestrator) buildResult(answer string, transcript *Transcript, mode string, usage types.UsageReport) DebateResult {
 	if mode == "debug" {
-		return DebateResult{FinalAnswer: transcript.ToCleanSummary(), Transcript: transcript}
+		return DebateResult{FinalAnswer: transcript.ToCleanSummary(), Transcript: transcript, Usage: usage}
 	}
 	if mode == "audit" {
-		return DebateResult{FinalAnswer: transcript.ToJSON(), Transcript: transcript}
+		return DebateResult{FinalAnswer: transcript.ToJSON(), Transcript: transcript, Usage: usage}
 	}
-	return DebateResult{FinalAnswer: answer, Transcript: transcript}
+	return DebateResult{FinalAnswer: answer, Transcript: transcript, Usage: usage}
 }

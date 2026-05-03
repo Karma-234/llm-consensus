@@ -81,6 +81,11 @@ func (c *AnthropicClient) ChatCompletion(ctx context.Context, req types.ChatRequ
 
 	return types.ChatResponse{
 		Content: fullContent.String(),
+		Usage: types.Usage{
+			PromptTokens:     anthropicResp.Usage.InputTokens,
+			CompletionTokens: anthropicResp.Usage.OutputTokens,
+			TotalTokens:      anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens,
+		},
 	}, nil
 
 }
@@ -101,6 +106,12 @@ type anthropicResponse struct {
 	Content []anthropicContentBlock `json:"content"`
 	ID      string                  `json:"id"`
 	Model   string                  `json:"model"`
+	Usage   anthropicUsage          `json:"usage"`
+}
+
+type anthropicUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
 }
 
 type anthropicContentBlock struct {

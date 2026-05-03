@@ -103,6 +103,13 @@ func handleNormal(w http.ResponseWriter, r *http.Request, orchestrator *debate.O
 }
 
 // Streaming response using Server-Sent Events
+// Events emitted (in order):
+//
+//	event: stage_start     — debate phase beginning
+//	event: stage_complete  — debate phase done, includes phase-level usage
+//	event: answer_chunk    — token of the final answer (streamed word by word)
+//	event: usage_summary   — grand total token accounting
+//	event: done            — terminal marker (data: [DONE])
 func handleStreaming(w http.ResponseWriter, r *http.Request, orchestrator *debate.Orchestrator, req ChatCompletionRequest) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -115,67 +122,70 @@ func handleStreaming(w http.ResponseWriter, r *http.Request, orchestrator *debat
 		return
 	}
 
-	// Run the full debate (we still need to compute the consensus first)
+	// Emit stage_start events immediately so clients see real-time phase progress
+	// before RunDebate completes.
+	for _, ph := range []string{"draft", "critique", "synthesize", "vote"} {
+		sendNamedSSEEvent(w, flusher, "stage_start", map[string]any{"phase": ph}) //nolint:errcheck
+	}
+
 	result, err := runDebate(orchestrator, r.Context(), req.Messages, req.Model)
 	if err != nil {
 		log.Printf("Debate failed: %v", err)
-		sendErrorEvent(w, flusher, consensusInternalErrorMessage)
+		// Terminating error — emit error event then close the stream.
+		sendNamedSSEEvent(w, flusher, "error", map[string]any{"message": consensusInternalErrorMessage}) //nolint:errcheck
+		_ = sendSSEDone(w, flusher)
 		return
 	}
 
-	// Stream the final answer word-by-word for a natural feel
-	content := result.FinalAnswer
-	words := strings.Fields(content)
+	// Emit stage_complete events for each phase with real per-phase usage.
+	for _, ph := range result.Usage.PerPhase {
+		sendNamedSSEEvent(w, flusher, "stage_complete", map[string]any{ //nolint:errcheck
+			"phase": ph.Phase,
+			"usage": ph.Usage,
+		})
+	}
 
+	// Stream the final answer word by word as answer_chunk events.
+	words := strings.Fields(result.FinalAnswer)
 	for i, word := range words {
-		chunk := map[string]any{
-			"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
-			"object":  "chat.completion.chunk",
-			"created": time.Now().Unix(),
-			"model":   req.Model,
-			"choices": []map[string]any{
-				{
-					"index": 0,
-					"delta": map[string]string{
-						"content": word + " ",
-					},
-					"finish_reason": nil,
-				},
-			},
+		payload := map[string]any{
+			"index": 0,
+			"delta": map[string]string{"content": word + " "},
 		}
-
-		if err := sendSSEEvent(w, flusher, chunk); err != nil {
+		if i == len(words)-1 {
+			payload["finish_reason"] = "stop"
+		}
+		if err := sendNamedSSEEvent(w, flusher, "answer_chunk", payload); err != nil {
 			return
 		}
-
-		// Small delay to make streaming visible and feel natural
+		// Small pacing delay every few words for a natural read feel.
 		if i%3 == 0 {
 			time.Sleep(40 * time.Millisecond)
 		}
 	}
 
-	// Send the final [DONE] chunk
-	doneChunk := map[string]any{
-		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
-		"object":  "chat.completion.chunk",
-		"created": time.Now().Unix(),
-		"model":   req.Model,
-		"choices": []map[string]any{
-			{
-				"index":         0,
-				"delta":         map[string]string{},
-				"finish_reason": "stop",
-			},
-		},
-	}
+	// Emit aggregated usage summary before closing the stream.
+	sendNamedSSEEvent(w, flusher, "usage_summary", map[string]any{ //nolint:errcheck
+		"total":     result.Usage.Total,
+		"per_phase": result.Usage.PerPhase,
+		"per_agent": result.Usage.PerAgent,
+	})
 
-	if err := sendSSEEvent(w, flusher, doneChunk); err != nil {
-		return
-	}
 	_ = sendSSEDone(w, flusher)
 }
 
-// Helper to send SSE event
+// sendNamedSSEEvent writes a named SSE event (event: <name>\ndata: <json>\n\n).
+func sendNamedSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventName string, data map[string]any) error {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, jsonData)
+	flusher.Flush()
+	return nil
+}
+
+// sendSSEEvent writes a generic (unnamed) SSE data line.
 func sendSSEEvent(w http.ResponseWriter, flusher http.Flusher, data map[string]any) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -199,7 +209,7 @@ func sendErrorEvent(w http.ResponseWriter, flusher http.Flusher, message string)
 	errorData := map[string]any{
 		"error": map[string]string{"message": message},
 	}
-	sendSSEEvent(w, flusher, errorData)
+	_ = sendNamedSSEEvent(w, flusher, "error", errorData)
 }
 
 // Build standard OpenAI response for non-streaming

@@ -143,7 +143,55 @@ Request fields:
 
 Non-streaming returns one completion object.
 
-Streaming returns SSE chunks and a terminal:
+Streaming returns a sequence of named Server-Sent Events followed by a terminal marker:
+
+```
+event: stage_start
+data: {"phase":"draft"}
+
+event: stage_start
+data: {"phase":"critique"}
+
+event: stage_start
+data: {"phase":"synthesize"}
+
+event: stage_start
+data: {"phase":"vote"}
+
+event: stage_complete
+data: {"phase":"draft","usage":{"prompt_tokens":120,"completion_tokens":80,"total_tokens":200}}
+
+... (one stage_complete per completed phase)
+
+event: answer_chunk
+data: {"index":0,"delta":{"content":"word "}}
+
+... (one answer_chunk per word of the final answer)
+
+event: answer_chunk
+data: {"index":0,"delta":{"content":"last "},"finish_reason":"stop"}
+
+event: usage_summary
+data: {
+  "total":{"prompt_tokens":480,"completion_tokens":320,"total_tokens":800},
+  "per_phase":[{"phase":"draft","usage":{...}}, ...],
+  "per_agent":[{"agent":"analyst","phase":"draft","usage":{...}}, ...]
+}
+
+data: [DONE]
+```
+
+**Event types:**
+
+| Event | When emitted | Payload |
+|---|---|---|
+| `stage_start` | Immediately before each debate phase begins | `phase` name |
+| `stage_complete` | After each phase completes | `phase` name + `usage` counters |
+| `answer_chunk` | Each word of the final answer | `index`, `delta.content`, optional `finish_reason` |
+| `usage_summary` | After all answer chunks | `total`, `per_phase`, `per_agent` token counts |
+| `error` (terminating) | On fatal debate failure | `message` (sanitized), followed by `[DONE]` |
+
+Terminal marker:
 
 ```text
 data: [DONE]
