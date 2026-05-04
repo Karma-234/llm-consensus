@@ -53,15 +53,26 @@ presets:
     max_rounds: 1
     strict_unanimity: false
     output_mode: clean
+    max_total_tokens: 0 # 0 = unlimited
+    max_retries: 1
   balanced:
     max_rounds: 2
     strict_unanimity: true
     output_mode: clean
+    max_total_tokens: 0
+    max_retries: 2
   paranoid:
     max_rounds: 4
     strict_unanimity: true
     output_mode: clean
+    max_total_tokens: 0
+    max_retries: 3
   debug:
     max_rounds: 3
     strict_unanimity: false
     output_mode: debug
+    max_total_tokens: 0
+    max_retries: 2
+
+otel:
+  endpoint: "" # empty = disabled; set to e.g. http://localhost:4318 for OTLP HTTP

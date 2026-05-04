@@ -23,6 +23,9 @@ type Config struct {
 	Output        struct {
 		DefaultMode string `yaml:"default_mode"`
 	} `yaml:"output"`
+	OTel struct {
+		Endpoint string `yaml:"endpoint"` // empty = disabled (noop tracer)
+	} `yaml:"otel"`
 }
 
 type Agent struct {
@@ -43,6 +46,8 @@ type Preset struct {
 	MaxRounds       int    `yaml:"max_rounds"`
 	StrictUnanimity bool   `yaml:"strict_unanimity"`
 	OutputMode      string `yaml:"output_mode"`
+	MaxTotalTokens  int    `yaml:"max_total_tokens"` // 0 = unlimited
+	MaxRetries      int    `yaml:"max_retries"`      // 0 = no retry
 }
 
 func (c *Config) GetPreset(modelName string) Preset {

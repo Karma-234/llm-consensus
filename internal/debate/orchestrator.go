@@ -2,13 +2,22 @@ package debate
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/karma-234/llm-consensus/internal/config"
+	"github.com/karma-234/llm-consensus/internal/metrics"
 	"github.com/karma-234/llm-consensus/internal/provider"
+	"github.com/karma-234/llm-consensus/internal/store"
 	"github.com/karma-234/llm-consensus/internal/types"
 )
 
@@ -16,21 +25,61 @@ type Orchestrator struct {
 	prompt        *DebatePrompt
 	cfg           *config.Config
 	clientFactory *provider.ClientFactory
+	store         *store.TranscriptStore
 }
 
-func NewOrchestrator(cfg *config.Config, clientFactory *provider.ClientFactory) *Orchestrator {
+func NewOrchestrator(cfg *config.Config, clientFactory *provider.ClientFactory, ts *store.TranscriptStore) *Orchestrator {
 	prompt := NewDebatePrompt()
 	return &Orchestrator{
 		prompt:        prompt,
 		cfg:           cfg,
 		clientFactory: clientFactory,
+		store:         ts,
 	}
 }
 
+// generateDebateID produces a short unique ID (16 hex chars) using crypto/rand.
+func generateDebateID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: timestamp-based ID if crypto/rand is unavailable.
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
+
+// retryCall executes fn up to 1+maxRetries times with exponential backoff.
+// It respects ctx cancellation between retries.
+func retryCall(ctx context.Context, maxRetries int, fn func() error) error {
+	delays := []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if err := fn(); err != nil {
+			lastErr = err
+			if attempt < maxRetries {
+				delay := delays[min(attempt, len(delays)-1)]
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				continue
+			}
+		} else {
+			return nil
+		}
+	}
+	return lastErr
+}
+
 type DebateResult struct {
-	FinalAnswer string
-	Transcript  *Transcript
-	Usage       types.UsageReport
+	FinalAnswer         string
+	Transcript          *Transcript
+	Usage               types.UsageReport
+	DebateID            string
+	ConsensusConfidence float64
+	DisagreementSummary string
+	TokenBudgetExceeded bool
 }
 
 // usageAccumulator collects per-call AgentUsage records concurrently
@@ -82,14 +131,12 @@ func (a *usageAccumulator) report() types.UsageReport {
 	}
 }
 
-func (o *Orchestrator) runDraftPhase(ctx context.Context, messages []types.Message, transcript *Transcript, acc *usageAccumulator) (map[string]string, error) {
+func (o *Orchestrator) runDraftPhase(ctx context.Context, maxRetries int, messages []types.Message, transcript *Transcript, acc *usageAccumulator) (map[string]string, error) {
 	agentNames := o.clientFactory.GetAllClients()
 	drafts := make(map[string]string)
 
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-
-	errChan := make(chan error, len(agentNames))
 
 	for _, name := range agentNames {
 		wg.Add(1)
@@ -97,17 +144,20 @@ func (o *Orchestrator) runDraftPhase(ctx context.Context, messages []types.Messa
 			defer wg.Done()
 			client, err := o.clientFactory.GetClient(agentName)
 			if err != nil {
-				errChan <- fmt.Errorf("failed to get client for agent %s: %w", agentName, err)
+				slog.Warn("skipping agent: failed to get client", "agent", agentName, "error", err)
 				return
 			}
 			prompt := o.prompt.DraftPrompt(agentName, messages)
-			resp, err := client.ChatCompletion(ctx, types.ChatRequest{
-				Messages: []types.Message{
-					{Role: types.RoleSystem, Content: prompt},
-				},
+			var resp types.ChatResponse
+			err = retryCall(ctx, maxRetries, func() error {
+				var callErr error
+				resp, callErr = client.ChatCompletion(ctx, types.ChatRequest{
+					Messages: []types.Message{{Role: types.RoleSystem, Content: prompt}},
+				})
+				return callErr
 			})
 			if err != nil {
-				errChan <- fmt.Errorf("agent %s failed to generate draft: %w", agentName, err)
+				slog.Warn("agent draft failed permanently, skipping", "agent", agentName, "error", err)
 				return
 			}
 			mu.Lock()
@@ -115,27 +165,22 @@ func (o *Orchestrator) runDraftPhase(ctx context.Context, messages []types.Messa
 			transcript.AddDraftPhase(agentName, resp.Content)
 			acc.add(agentName, "draft", resp.Usage)
 			mu.Unlock()
-
 		}(name)
 	}
 	wg.Wait()
-	close(errChan)
 
-	if len(errChan) > 0 {
-		return nil, <-errChan
+	if len(drafts) == 0 {
+		return nil, fmt.Errorf("all agents failed during draft phase")
 	}
-
 	return drafts, nil
 }
 
-func (o *Orchestrator) runCritiquePhase(ctx context.Context, messages []types.Message, drafts map[string]string, transcript *Transcript, acc *usageAccumulator) (map[string]string, error) {
+func (o *Orchestrator) runCritiquePhase(ctx context.Context, maxRetries int, messages []types.Message, drafts map[string]string, transcript *Transcript, acc *usageAccumulator) (map[string]string, error) {
 	agentNames := o.clientFactory.GetAllClients()
 	critiques := make(map[string]string)
 
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-
-	errChan := make(chan error, len(agentNames))
 
 	for _, name := range agentNames {
 		wg.Add(1)
@@ -143,18 +188,21 @@ func (o *Orchestrator) runCritiquePhase(ctx context.Context, messages []types.Me
 			defer wg.Done()
 			client, err := o.clientFactory.GetClient(agentName)
 			if err != nil {
-				errChan <- fmt.Errorf("failed to get client for agent %s: %w", agentName, err)
+				slog.Warn("skipping agent: failed to get client", "agent", agentName, "error", err)
 				return
 			}
 			prompt := o.prompt.CritiquePrompt(messages, drafts, agentName)
-			resp, err := client.ChatCompletion(ctx, types.ChatRequest{
-				Messages: []types.Message{
-					{Role: types.RoleUser, Content: prompt},
-				},
-				Temperature: 0.7,
+			var resp types.ChatResponse
+			err = retryCall(ctx, maxRetries, func() error {
+				var callErr error
+				resp, callErr = client.ChatCompletion(ctx, types.ChatRequest{
+					Messages:    []types.Message{{Role: types.RoleUser, Content: prompt}},
+					Temperature: 0.7,
+				})
+				return callErr
 			})
 			if err != nil {
-				errChan <- fmt.Errorf("agent %s failed to generate critique: %w", agentName, err)
+				slog.Warn("agent critique failed permanently, skipping", "agent", agentName, "error", err)
 				return
 			}
 			mu.Lock()
@@ -162,26 +210,21 @@ func (o *Orchestrator) runCritiquePhase(ctx context.Context, messages []types.Me
 			transcript.AddCritiquePhase(agentName, resp.Content)
 			acc.add(agentName, "critique", resp.Usage)
 			mu.Unlock()
-
 		}(name)
 	}
 	wg.Wait()
-	close(errChan)
 
-	if len(errChan) > 0 {
-		return nil, <-errChan
+	if len(critiques) == 0 {
+		return nil, fmt.Errorf("all agents failed during critique phase")
 	}
-
 	return critiques, nil
 }
 
-func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []types.Message, activeAgents []string, candidate string, transcript *Transcript, acc *usageAccumulator) (map[string]Vote, error) {
+func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, maxRetries int, messages []types.Message, activeAgents []string, candidate string, transcript *Transcript, acc *usageAccumulator) (map[string]Vote, error) {
 	votes := make(map[string]Vote)
 
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-
-	errChan := make(chan error, len(activeAgents))
 
 	for _, name := range activeAgents {
 		wg.Add(1)
@@ -189,23 +232,26 @@ func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []t
 			defer wg.Done()
 			client, err := o.clientFactory.GetClient(agentName)
 			if err != nil {
-				errChan <- fmt.Errorf("failed to get client for agent %s: %w", agentName, err)
+				slog.Warn("skipping agent: failed to get client", "agent", agentName, "error", err)
 				return
 			}
-			prompt := o.prompt.VotePrompt(messages, candidate, name)
-			resp, err := client.ChatCompletion(ctx, types.ChatRequest{
-				Messages: []types.Message{
-					{Role: types.RoleUser, Content: prompt},
-				},
-				Temperature: 0.0,
+			prompt := o.prompt.VotePrompt(messages, candidate, agentName)
+			var resp types.ChatResponse
+			err = retryCall(ctx, maxRetries, func() error {
+				var callErr error
+				resp, callErr = client.ChatCompletion(ctx, types.ChatRequest{
+					Messages:    []types.Message{{Role: types.RoleUser, Content: prompt}},
+					Temperature: 0.0,
+				})
+				return callErr
 			})
 			if err != nil {
-				errChan <- fmt.Errorf("agent %s failed to generate vote: %w", agentName, err)
+				slog.Warn("agent vote failed permanently, skipping", "agent", agentName, "error", err)
 				return
 			}
 			vote, err := ParseVoteResponse(resp.Content)
 			if err != nil {
-				errChan <- fmt.Errorf("agent %s failed to parse vote response: %w", agentName, err)
+				slog.Warn("agent vote parse failed, skipping", "agent", agentName, "error", err)
 				return
 			}
 			mu.Lock()
@@ -213,16 +259,13 @@ func (o *Orchestrator) runSelectiveVotingPhase(ctx context.Context, messages []t
 			transcript.AddVote(agentName, vote)
 			acc.add(agentName, "vote", resp.Usage)
 			mu.Unlock()
-
 		}(name)
 	}
 	wg.Wait()
-	close(errChan)
 
-	if len(errChan) > 0 {
-		return nil, <-errChan
+	if len(votes) == 0 {
+		return nil, fmt.Errorf("all agents failed during voting phase")
 	}
-
 	return votes, nil
 }
 func (o *Orchestrator) runSelectiveRevisePhase(ctx context.Context, candidate string, issues []string, activeAgents []string, transcript *Transcript, messages []types.Message, acc *usageAccumulator) string {
@@ -244,14 +287,14 @@ func (o *Orchestrator) runSelectiveRevisePhase(ctx context.Context, candidate st
 		Temperature: 0.6,
 	})
 	if err != nil {
-		log.Printf("Revision failed for %s, keeping previous candidate", reviseAgent)
+		slog.Warn("revision failed, keeping previous candidate", "agent", reviseAgent, "error", err)
 		return candidate
 	}
 
 	newCandidate := resp.Content
 	acc.add(reviseAgent, "revise", resp.Usage)
 	transcript.AddRevision(reviseAgent, newCandidate, issues)
-	log.Printf("Revised by %s", reviseAgent)
+	slog.Info("revision completed", "agent", reviseAgent)
 
 	return newCandidate
 }
@@ -286,7 +329,7 @@ func (o *Orchestrator) runSynthesizePhase(ctx context.Context, messages []types.
 		Temperature: 0.5,
 	})
 	if err != nil {
-		log.Printf("Synthesis failed: %v", err)
+		slog.Error("synthesis failed", "error", err)
 		return "Synthesis failed."
 	}
 
@@ -307,59 +350,189 @@ func (o *Orchestrator) fallbackToBestCandidate(candidate string) string {
 }
 
 func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, modelName string) (DebateResult, error) {
+	// OTel root span
+	tracer := otel.Tracer("llm-consensus")
+	ctx, span := tracer.Start(ctx, "debate")
+	span.SetAttributes(
+		attribute.String("debate.model", modelName),
+	)
+	defer span.End()
+
 	start := time.Now()
 	preset := o.resolvePreset(modelName)
+	debateID := generateDebateID()
 
 	maxRounds := preset.MaxRounds
 	strictUnanimity := preset.StrictUnanimity
 	outputMode := preset.OutputMode
+	maxRetries := preset.MaxRetries
 	transcript := NewTranscript(messages)
 	acc := &usageAccumulator{}
 
-	drafts, err := o.runDraftPhase(ctx, messages, transcript, acc)
+	metrics.ActiveDebates.Inc()
+	defer metrics.ActiveDebates.Dec()
+
+	slog.Info("debate started", "id", debateID, "model", modelName, "max_rounds", maxRounds)
+
+	// bestCandidate tracks the latest synthesized answer so token-budget
+	// exhaustion can return a useful partial result.
+	bestCandidate := ""
+
+	budgetExceeded := func() bool {
+		if preset.MaxTotalTokens <= 0 {
+			return false
+		}
+		return acc.report().Total.TotalTokens >= preset.MaxTotalTokens
+	}
+
+	phaseStart := time.Now()
+	drafts, err := o.runDraftPhase(ctx, maxRetries, messages, transcript, acc)
+	metrics.PhaseDuration.WithLabelValues("draft").Observe(time.Since(phaseStart).Seconds())
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "draft phase failed")
+		metrics.DebateTotal.WithLabelValues(modelName, "error").Inc()
 		return DebateResult{}, fmt.Errorf("draft phase failed: %w", err)
 	}
+	if budgetExceeded() {
+		slog.Warn("token budget exceeded after draft phase", "id", debateID)
+		res := o.buildResult(bestCandidate, transcript, outputMode, acc.report())
+		res.DebateID = debateID
+		res.TokenBudgetExceeded = true
+		o.persistTranscript(debateID, transcript)
+		return res, nil
+	}
 
-	critiques, err := o.runCritiquePhase(ctx, messages, drafts, transcript, acc)
+	phaseStart = time.Now()
+	critiques, err := o.runCritiquePhase(ctx, maxRetries, messages, drafts, transcript, acc)
+	metrics.PhaseDuration.WithLabelValues("critique").Observe(time.Since(phaseStart).Seconds())
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "critique phase failed")
+		metrics.DebateTotal.WithLabelValues(modelName, "error").Inc()
 		return DebateResult{}, fmt.Errorf("critique phase failed: %w", err)
 	}
+	if budgetExceeded() {
+		slog.Warn("token budget exceeded after critique phase", "id", debateID)
+		res := o.buildResult(bestCandidate, transcript, outputMode, acc.report())
+		res.DebateID = debateID
+		res.TokenBudgetExceeded = true
+		o.persistTranscript(debateID, transcript)
+		return res, nil
+	}
 
+	phaseStart = time.Now()
 	candidate := o.runSynthesizePhase(ctx, messages, drafts, critiques, transcript, acc)
+	metrics.PhaseDuration.WithLabelValues("synthesize").Observe(time.Since(phaseStart).Seconds())
+	bestCandidate = candidate
+	if budgetExceeded() {
+		slog.Warn("token budget exceeded after synthesize phase", "id", debateID)
+		res := o.buildResult(bestCandidate, transcript, outputMode, acc.report())
+		res.DebateID = debateID
+		res.TokenBudgetExceeded = true
+		o.persistTranscript(debateID, transcript)
+		return res, nil
+	}
 
 	activeAgents := o.clientFactory.GetAllClients()
+	var bestConfidence float64
+	var lastVotes map[string]Vote
+
 	for round := 1; round <= maxRounds; round++ {
-		votes, err := o.runSelectiveVotingPhase(ctx, messages, activeAgents, candidate, transcript, acc)
+		phaseStart = time.Now()
+		votes, err := o.runSelectiveVotingPhase(ctx, maxRetries, messages, activeAgents, candidate, transcript, acc)
+		metrics.PhaseDuration.WithLabelValues("vote").Observe(time.Since(phaseStart).Seconds())
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "voting phase failed")
+			metrics.DebateTotal.WithLabelValues(modelName, "error").Inc()
 			return DebateResult{}, fmt.Errorf("voting phase failed: %w", err)
 		}
-		result := EvaluateConsensus(votes, strictUnanimity)
-		transcript.AddVotingRound(round, votes, result.Issues)
-		activeAgents = o.updateActiveAgents(votes)
-		if result.ConsensusReached {
-			log.Printf("Consensus reached in %d rounds with preset '%s' (%v)", round, modelName, time.Since(start))
-			transcript.SetFinalAnswer(candidate)
-			return o.buildResult(candidate, transcript, outputMode, acc.report()), nil
+		lastVotes = votes
+
+		consensusResult := EvaluateConsensus(votes, strictUnanimity)
+		transcript.AddVotingRound(round, votes, consensusResult.Issues)
+
+		// Track highest approval rate seen across all rounds.
+		roundConfidence := float64(consensusResult.ApprovalCount) / float64(len(votes))
+		if roundConfidence > bestConfidence {
+			bestConfidence = roundConfidence
 		}
+
+		activeAgents = o.updateActiveAgents(votes)
+
+		if consensusResult.ConsensusReached {
+			slog.Info("consensus reached", "id", debateID, "round", round, "preset", modelName, "duration", time.Since(start).String())
+			transcript.SetFinalAnswer(candidate)
+			res := o.buildResult(candidate, transcript, outputMode, acc.report())
+			res.DebateID = debateID
+			res.ConsensusConfidence = bestConfidence
+			metrics.DebateTotal.WithLabelValues(modelName, "consensus").Inc()
+			metrics.ConsensusReachedTotal.Inc()
+			report := acc.report()
+			metrics.TokensTotal.WithLabelValues("total", "prompt").Add(float64(report.Total.PromptTokens))
+			metrics.TokensTotal.WithLabelValues("total", "completion").Add(float64(report.Total.CompletionTokens))
+			span.SetAttributes(attribute.String("debate.id", debateID), attribute.Float64("debate.confidence", bestConfidence))
+			o.persistTranscript(debateID, transcript)
+			return res, nil
+		}
+
 		if round < maxRounds {
-			candidate = o.runSelectiveRevisePhase(ctx, candidate, result.Issues, activeAgents, transcript, messages, acc)
+			candidate = o.runSelectiveRevisePhase(ctx, candidate, consensusResult.Issues, activeAgents, transcript, messages, acc)
+			bestCandidate = candidate
+			if budgetExceeded() {
+				slog.Warn("token budget exceeded after revise phase", "id", debateID, "round", round)
+				res := o.buildResult(bestCandidate, transcript, outputMode, acc.report())
+				res.DebateID = debateID
+				res.ConsensusConfidence = bestConfidence
+				res.TokenBudgetExceeded = true
+				o.persistTranscript(debateID, transcript)
+				return res, nil
+			}
 		}
 	}
 
-	finalAnswer := o.fallbackToBestCandidate(candidate)
-	log.Printf("Debate ended with fallback after %v", time.Since(start))
+	// Max rounds exhausted without consensus.
+	disagreement := ""
+	if lastVotes != nil {
+		disagreement = SurfaceDisagreement(lastVotes)
+	}
 
+	finalAnswer := o.fallbackToBestCandidate(bestCandidate)
+	if disagreement != "" {
+		finalAnswer = finalAnswer + "\n\n[Disagreement summary: " + disagreement + "]"
+	}
+
+	slog.Info("debate ended with fallback", "id", debateID, "duration", time.Since(start).String(), "disagreement", disagreement)
 	transcript.SetFinalAnswer(finalAnswer)
+	metrics.DebateTotal.WithLabelValues(modelName, "fallback").Inc()
+	report := acc.report()
+	metrics.TokensTotal.WithLabelValues("total", "prompt").Add(float64(report.Total.PromptTokens))
+	metrics.TokensTotal.WithLabelValues("total", "completion").Add(float64(report.Total.CompletionTokens))
+	span.SetAttributes(attribute.String("debate.id", debateID), attribute.Float64("debate.confidence", bestConfidence))
+	o.persistTranscript(debateID, transcript)
+
 	return DebateResult{
-		FinalAnswer: finalAnswer,
-		Transcript:  transcript,
-		Usage:       acc.report(),
+		FinalAnswer:         finalAnswer,
+		Transcript:          transcript,
+		Usage:               acc.report(),
+		DebateID:            debateID,
+		ConsensusConfidence: bestConfidence,
+		DisagreementSummary: disagreement,
 	}, nil
 }
 func (o *Orchestrator) resolvePreset(modelName string) config.Preset {
 	return o.cfg.GetPreset(modelName)
 }
+
+// persistTranscript saves the transcript JSON to the store if one is configured.
+func (o *Orchestrator) persistTranscript(id string, t *Transcript) {
+	if o.store == nil {
+		return
+	}
+	o.store.Put(id, json.RawMessage(t.ToJSON()))
+}
+
 func (o *Orchestrator) buildResult(answer string, transcript *Transcript, mode string, usage types.UsageReport) DebateResult {
 	if mode == "debug" {
 		return DebateResult{FinalAnswer: transcript.ToCleanSummary(), Transcript: transcript, Usage: usage}
