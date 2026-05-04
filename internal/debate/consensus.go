@@ -61,6 +61,7 @@ func ParseVoteResponse(content string) (Vote, error) {
 type ConsensusResult struct {
 	ConsensusReached bool     `json:"consensus_reached"`
 	Issues           []string `json:"issues,omitempty"`
+	ApprovalCount    int      `json:"approval_count"`
 }
 
 func EvaluateConsensus(votes map[string]Vote, strictUnanimity bool) ConsensusResult {
@@ -83,7 +84,59 @@ func EvaluateConsensus(votes map[string]Vote, strictUnanimity bool) ConsensusRes
 	return ConsensusResult{
 		ConsensusReached: consensusReached,
 		Issues:           issues,
+		ApprovalCount:    approvals,
 	}
+}
+
+// SurfaceDisagreement summarises why agents failed to reach consensus.
+// It deduplicates blocking issues across rejecting agents and groups them.
+func SurfaceDisagreement(votes map[string]Vote) string {
+	type agentIssues struct {
+		agent  string
+		issues []string
+	}
+	var rejectors []agentIssues
+	seen := make(map[string]bool)
+
+	for agent, v := range votes {
+		if v.Approve {
+			continue
+		}
+		var unique []string
+		for _, iss := range v.BlockingIssues {
+			if !seen[iss] {
+				seen[iss] = true
+				unique = append(unique, iss)
+			}
+		}
+		if len(unique) > 0 || !v.Approve {
+			rejectors = append(rejectors, agentIssues{agent: agent, issues: unique})
+		}
+	}
+
+	if len(rejectors) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	if len(rejectors) == 1 {
+		fmt.Fprintf(&sb, "Agents converge on one concern (%s)", rejectors[0].agent)
+		if len(rejectors[0].issues) > 0 {
+			fmt.Fprintf(&sb, ": %s", strings.Join(rejectors[0].issues, "; "))
+		}
+	} else {
+		sb.WriteString("Fundamental disagreement — ")
+		parts := make([]string, 0, len(rejectors))
+		for _, r := range rejectors {
+			if len(r.issues) > 0 {
+				parts = append(parts, fmt.Sprintf("%s raises: %s", r.agent, strings.Join(r.issues, ", ")))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s did not approve", r.agent))
+			}
+		}
+		sb.WriteString(strings.Join(parts, "; "))
+	}
+	return sb.String()
 }
 
 func GetBestCandidateVote(votes map[string]Vote) (bestCandidate string, vote Vote) {

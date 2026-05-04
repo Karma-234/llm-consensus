@@ -15,23 +15,22 @@ func NewDebatePrompt() *DebatePrompt {
 }
 
 func (p *DebatePrompt) DraftPrompt(agentName string, messages []types.Message) string {
-	reqQuery := extractUserQuery(messages)
+	history := formatConversationHistory(messages)
 
 	result := fmt.Sprintf(`You are %s, an expert AI assistant participating in a collaborative debate to produce the highest quality response.
 
-							Original query:
-							%s
+						Conversation history:
+						%s
 
-							Your task in this phase: Generate a strong, comprehensive initial draft answer to the query above.
-							Be thorough, accurate, and well-structured. Use clear reasoning.
+						Your task in this phase: Generate a strong, comprehensive initial draft answer to the latest user query above.
+						Be thorough, accurate, and well-structured. Use clear reasoning.
 
-							Write your draft now:`, agentName, reqQuery)
-
+						Write your draft now:`, agentName, history)
 	return result
 }
 
 func (p *DebatePrompt) CritiquePrompt(messages []types.Message, drafts map[string]string, agentName string) string {
-	userQuery := extractUserQuery(messages)
+	history := formatConversationHistory(messages)
 
 	var draftSection strings.Builder
 	for name, draft := range drafts {
@@ -40,7 +39,7 @@ func (p *DebatePrompt) CritiquePrompt(messages []types.Message, drafts map[strin
 
 	return fmt.Sprintf(`You are %s, a critical and analytical AI participating in a multi-agent debate.
 
-						Original query:
+						Conversation history:
 						%s
 
 						Here are the initial drafts from all participating agents:
@@ -53,11 +52,11 @@ func (p *DebatePrompt) CritiquePrompt(messages []types.Message, drafts map[strin
 
 						Be constructive but rigorous. Structure your critique clearly, labeling each draft you review.
 
-						Provide your detailed critique:`, agentName, userQuery, draftSection.String())
+						Provide your detailed critique:`, agentName, history, draftSection.String())
 }
 
 func (p *DebatePrompt) SynthesizePrompt(messages []types.Message, drafts, critiques map[string]string) string {
-	userQuery := extractUserQuery(messages)
+	history := formatConversationHistory(messages)
 
 	var draftSection, critiqueSection strings.Builder
 
@@ -70,7 +69,7 @@ func (p *DebatePrompt) SynthesizePrompt(messages []types.Message, drafts, critiq
 
 	return fmt.Sprintf(`You are an expert synthesizer in a multi-agent debate system.
 
-						Original query:
+						Conversation history:
 						%s
 
 						Initial drafts:
@@ -87,15 +86,15 @@ func (p *DebatePrompt) SynthesizePrompt(messages []types.Message, drafts, critiq
 						- Produce a coherent, comprehensive, and polished response
 						- Maintain high factual accuracy and logical consistency
 
-						Output only the synthesized answer (no meta-commentary):`, userQuery, draftSection.String(), critiqueSection.String())
+						Output only the synthesized answer (no meta-commentary):`, history, draftSection.String(), critiqueSection.String())
 }
 
 func (p *DebatePrompt) VotePrompt(messages []types.Message, candidate string, agentName string) string {
-	userQuery := extractUserQuery(messages)
+	history := formatConversationHistory(messages)
 
 	return fmt.Sprintf(`You are %s, participating in the final consensus phase of a multi-agent debate.
 
-						Original query:
+						Conversation history:
 						%s
 
 						Current candidate answer:
@@ -134,11 +133,11 @@ func (p *DebatePrompt) VotePrompt(messages []types.Message, candidate string, ag
 						4. Do not include markdown, backticks, or explanatory text
 						5. Output only the JSON object, nothing else
 
-						Be honest and rigorous. Only set "approve": true if the answer is excellent and free of major issues.`, agentName, userQuery, candidate)
+						Be honest and rigorous. Only set "approve": true if the answer is excellent and free of major issues.`, agentName, history, candidate)
 }
 
 func (p *DebatePrompt) RevisePrompt(messages []types.Message, candidate string, issues []string) string {
-	userQuery := extractUserQuery(messages)
+	history := formatConversationHistory(messages)
 
 	issuesStr := "None"
 	if len(issues) > 0 {
@@ -147,7 +146,7 @@ func (p *DebatePrompt) RevisePrompt(messages []types.Message, candidate string, 
 
 	return fmt.Sprintf(`You are an expert reviser in a multi-agent debate.
 
-						Original query:
+						Conversation history:
 						%s
 
 						Current candidate answer:
@@ -160,7 +159,7 @@ func (p *DebatePrompt) RevisePrompt(messages []types.Message, candidate string, 
 
 						Produce an improved version that should achieve higher consensus in the next voting round.
 
-						Output only the revised answer:`, userQuery, candidate, issuesStr)
+						Output only the revised answer:`, history, candidate, issuesStr)
 }
 
 func extractUserQuery(messages []types.Message) string {
@@ -173,4 +172,14 @@ func extractUserQuery(messages []types.Message) string {
 		return messages[len(messages)-1].Content
 	}
 	return "No query provided."
+}
+
+// formatConversationHistory formats the full message history so agents have
+// multi-turn context, not just the last user message.
+func formatConversationHistory(messages []types.Message) string {
+	var sb strings.Builder
+	for _, m := range messages {
+		fmt.Fprintf(&sb, "[%s]: %s\n", string(m.Role), m.Content)
+	}
+	return strings.TrimSpace(sb.String())
 }
