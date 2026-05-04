@@ -106,6 +106,8 @@ Preset fields:
 - `max_rounds`: max vote/revise loops
 - `strict_unanimity`: unanimous or majority acceptance
 - `output_mode`: `clean`, `debug`, or `audit`
+- `max_total_tokens`: token budget across all phases (0 = unlimited); debate halts early and returns best candidate when exceeded
+- `max_retries`: per-agent retry attempts on transient errors (exponential backoff: 250 ms → 500 ms → 1 s)
 
 ## Output Modes
 
@@ -127,9 +129,29 @@ Response:
 { "status": "ok" }
 ```
 
+### GET /metrics
+
+Prometheus metrics endpoint. Exposes:
+
+| Metric                                  | Type      | Labels                                             |
+| --------------------------------------- | --------- | -------------------------------------------------- |
+| `llm_consensus_debate_total`            | counter   | `model`, `status` (`consensus`/`fallback`/`error`) |
+| `llm_consensus_phase_duration_seconds`  | histogram | `phase`                                            |
+| `llm_consensus_tokens_total`            | counter   | `phase`, `token_type` (`prompt`/`completion`)      |
+| `llm_consensus_active_debates`          | gauge     | —                                                  |
+| `llm_consensus_consensus_reached_total` | counter   | —                                                  |
+
 ### GET /v1/models
 
-Returns OpenAI-compatible model list exposed by handler code.
+Returns an OpenAI-compatible model list derived from `config.yaml`. Includes all virtual model aliases and raw agent model names.
+
+### GET /v1/debate/{id}/transcript
+
+Retrieves the stored transcript for a completed debate by its ID. The ID is returned in the `X-Debate-ID` response header of the corresponding `/v1/chat/completions` call.
+
+Transcripts are held in memory for 1 hour then evicted.
+
+Returns `404` if the ID is unknown or expired.
 
 ### POST /v1/chat/completions
 
@@ -140,6 +162,11 @@ Request fields:
 - `model` (required)
 - `messages` (required)
 - `stream` (optional)
+- `callback_url` (optional): HTTP/HTTPS URL to receive a POST with the full `DebateResult` JSON once the debate completes (fired asynchronously, does not affect the response)
+
+Response headers:
+
+- `X-Debate-ID`: unique ID for the debate; use with `GET /v1/debate/{id}/transcript`
 
 Non-streaming returns one completion object.
 
@@ -175,7 +202,9 @@ event: usage_summary
 data: {
   "total":{"prompt_tokens":480,"completion_tokens":320,"total_tokens":800},
   "per_phase":[{"phase":"draft","usage":{...}}, ...],
-  "per_agent":[{"agent":"analyst","phase":"draft","usage":{...}}, ...]
+  "per_agent":[{"agent":"analyst","phase":"draft","usage":{...}}, ...],
+  "consensus_confidence":0.75,
+  "token_budget_exceeded":false
 }
 
 data: [DONE]
@@ -183,13 +212,13 @@ data: [DONE]
 
 **Event types:**
 
-| Event                 | When emitted                                | Payload                                            |
-| --------------------- | ------------------------------------------- | -------------------------------------------------- |
-| `stage_start`         | Immediately before each debate phase begins | `phase` name                                       |
-| `stage_complete`      | After each phase completes                  | `phase` name + `usage` counters                    |
-| `answer_chunk`        | Each word of the final answer               | `index`, `delta.content`, optional `finish_reason` |
-| `usage_summary`       | After all answer chunks                     | `total`, `per_phase`, `per_agent` token counts     |
-| `error` (terminating) | On fatal debate failure                     | `message` (sanitized), followed by `[DONE]`        |
+| Event                 | When emitted                                | Payload                                                                                               |
+| --------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `stage_start`         | Immediately before each debate phase begins | `phase` name                                                                                          |
+| `stage_complete`      | After each phase completes                  | `phase` name + `usage` counters                                                                       |
+| `answer_chunk`        | Each word of the final answer               | `index`, `delta.content`, optional `finish_reason`                                                    |
+| `usage_summary`       | After all answer chunks                     | `total`, `per_phase`, `per_agent` token counts, `consensus_confidence` (0–1), `token_budget_exceeded` |
+| `error` (terminating) | On fatal debate failure                     | `message` (sanitized), followed by `[DONE]`                                                           |
 
 Terminal marker:
 
@@ -206,7 +235,8 @@ All runtime config lives in `config.yaml`:
 - `debate`: global defaults (`max_rounds`, `strict_unanimity`)
 - `output`: default output mode
 - `virtual_models`: alias mapping to presets
-- `presets`: named behavior profiles
+- `presets`: named behavior profiles (each supports `max_total_tokens`, `max_retries`)
+- `otel.endpoint`: OTLP HTTP endpoint for tracing (e.g. `http://localhost:4318`); leave empty to disable
 
 ## Project Structure
 
@@ -224,6 +254,9 @@ internal/
   provider/client.go         # provider factory
   provider/openai.go         # OpenAI-compatible provider
   provider/anthropic.go      # Anthropic provider
+  store/transcript_store.go  # TTL in-memory transcript store
+  metrics/metrics.go         # Prometheus metric definitions
+  telemetry/tracer.go        # OpenTelemetry tracer init
   types/types.go             # shared request/response interfaces
 ```
 
