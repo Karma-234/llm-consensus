@@ -8,6 +8,7 @@
     "Single result",
     "Text only"
   ],
-  "0.1.1": ["Stage streaming events", "Token tracking", "Text only"]
+  "0.1.1": ["Stage streaming events", "Token tracking", "Text only"],
+  "0.1.2": ["Observability", "structured logging", "Metrics"]
 }
 ```
