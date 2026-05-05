@@ -3,6 +3,7 @@ module github.com/karma-234/llm-consensus
 go 1.25.0
 
 require (
+	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sashabaranov/go-openai v1.41.2
 	go.opentelemetry.io/otel v1.43.0

@@ -21,6 +21,50 @@ import (
 	"github.com/karma-234/llm-consensus/internal/types"
 )
 
+// StageStartHook is called by RunDebate immediately before each phase begins.
+type StageStartHook func(stage string) error
+
+type stageStartKey struct{}
+
+// WithStageStartHook returns a child context carrying hook, which fires
+// before draft, critique, synthesize, and vote phases begin.
+func WithStageStartHook(ctx context.Context, hook StageStartHook) context.Context {
+	return context.WithValue(ctx, stageStartKey{}, hook)
+}
+
+// emitStageStart fires the StageStartHook from ctx if one is attached.
+func emitStageStart(ctx context.Context, stage string) {
+	hook, _ := ctx.Value(stageStartKey{}).(StageStartHook)
+	if hook == nil {
+		return
+	}
+	if err := hook(stage); err != nil {
+		slog.Debug("stage_start hook error", "stage", stage, "error", err)
+	}
+}
+
+// StageCompleteHook is called by RunDebate immediately after each phase finishes,
+// with the real token usage accumulated for that phase.
+type StageCompleteHook func(stage string, usage types.Usage) error
+
+type stageCompleteKey struct{}
+
+// WithStageCompleteHook returns a child context carrying hook.
+func WithStageCompleteHook(ctx context.Context, hook StageCompleteHook) context.Context {
+	return context.WithValue(ctx, stageCompleteKey{}, hook)
+}
+
+// emitStageComplete fires the StageCompleteHook from ctx if one is attached.
+func emitStageComplete(ctx context.Context, stage string, usage types.Usage) {
+	hook, _ := ctx.Value(stageCompleteKey{}).(StageCompleteHook)
+	if hook == nil {
+		return
+	}
+	if err := hook(stage, usage); err != nil {
+		slog.Debug("stage_complete hook error", "stage", stage, "error", err)
+	}
+}
+
 type Orchestrator struct {
 	prompt        *DebatePrompt
 	cfg           *config.Config
@@ -93,6 +137,21 @@ func (a *usageAccumulator) add(agent, phase string, u types.Usage) {
 	a.mu.Lock()
 	a.records = append(a.records, types.AgentUsage{Agent: agent, Phase: phase, Usage: u})
 	a.mu.Unlock()
+}
+
+// phaseUsage returns the tokens accumulated for a single phase so far.
+func (a *usageAccumulator) phaseUsage(phase string) types.Usage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var u types.Usage
+	for _, r := range a.records {
+		if r.Phase == phase {
+			u.PromptTokens += r.Usage.PromptTokens
+			u.CompletionTokens += r.Usage.CompletionTokens
+			u.TotalTokens += r.Usage.TotalTokens
+		}
+	}
+	return u
 }
 
 func (a *usageAccumulator) report() types.UsageReport {
@@ -385,9 +444,11 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 		return acc.report().Total.TotalTokens >= preset.MaxTotalTokens
 	}
 
+	emitStageStart(ctx, "draft")
 	phaseStart := time.Now()
 	drafts, err := o.runDraftPhase(ctx, maxRetries, messages, transcript, acc)
 	metrics.PhaseDuration.WithLabelValues("draft").Observe(time.Since(phaseStart).Seconds())
+	emitStageComplete(ctx, "draft", acc.phaseUsage("draft"))
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "draft phase failed")
@@ -403,9 +464,11 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 		return res, nil
 	}
 
+	emitStageStart(ctx, "critique")
 	phaseStart = time.Now()
 	critiques, err := o.runCritiquePhase(ctx, maxRetries, messages, drafts, transcript, acc)
 	metrics.PhaseDuration.WithLabelValues("critique").Observe(time.Since(phaseStart).Seconds())
+	emitStageComplete(ctx, "critique", acc.phaseUsage("critique"))
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "critique phase failed")
@@ -421,9 +484,11 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 		return res, nil
 	}
 
+	emitStageStart(ctx, "synthesize")
 	phaseStart = time.Now()
 	candidate := o.runSynthesizePhase(ctx, messages, drafts, critiques, transcript, acc)
 	metrics.PhaseDuration.WithLabelValues("synthesize").Observe(time.Since(phaseStart).Seconds())
+	emitStageComplete(ctx, "synthesize", acc.phaseUsage("synthesize"))
 	bestCandidate = candidate
 	if budgetExceeded() {
 		slog.Warn("token budget exceeded after synthesize phase", "id", debateID)
@@ -439,9 +504,11 @@ func (o *Orchestrator) RunDebate(ctx context.Context, messages []types.Message, 
 	var lastVotes map[string]Vote
 
 	for round := 1; round <= maxRounds; round++ {
+		emitStageStart(ctx, "vote")
 		phaseStart = time.Now()
 		votes, err := o.runSelectiveVotingPhase(ctx, maxRetries, messages, activeAgents, candidate, transcript, acc)
 		metrics.PhaseDuration.WithLabelValues("vote").Observe(time.Since(phaseStart).Seconds())
+		emitStageComplete(ctx, "vote", acc.phaseUsage("vote"))
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "voting phase failed")

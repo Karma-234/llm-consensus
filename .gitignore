@@ -1,3 +1,7 @@
 .env
 Makefile
 *_test.go
+fs.go
+*.sh
+*.txt
+demo

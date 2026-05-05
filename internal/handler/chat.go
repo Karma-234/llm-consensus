@@ -145,13 +145,18 @@ func handleStreaming(w http.ResponseWriter, r *http.Request, orchestrator *debat
 		return
 	}
 
-	// Emit stage_start events immediately so clients see real-time phase progress
-	// before RunDebate completes.
-	for _, ph := range []string{"draft", "critique", "synthesize", "vote"} {
-		sendNamedSSEEvent(w, flusher, "stage_start", map[string]any{"phase": ph}) //nolint:errcheck
-	}
+	// Attach a hook so RunDebate emits stage_start and stage_complete SSE events at real phase boundaries.
+	stageHook := debate.StageStartHook(func(stage string) error {
+		return sendNamedSSEEvent(w, flusher, "stage_start", map[string]any{"phase": stage})
+	})
+	emittedPhases := make(map[string]bool)
+	stageCompleteHook := debate.StageCompleteHook(func(stage string, usage types.Usage) error {
+		emittedPhases[stage] = true
+		return sendNamedSSEEvent(w, flusher, "stage_complete", map[string]any{"phase": stage, "usage": usage})
+	})
+	debateCtx := debate.WithStageCompleteHook(debate.WithStageStartHook(r.Context(), stageHook), stageCompleteHook)
 
-	result, err := runDebate(orchestrator, r.Context(), req.Messages, req.Model)
+	result, err := runDebate(orchestrator, debateCtx, req.Messages, req.Model)
 	if err != nil {
 		slog.Error("debate failed", "error", err)
 		// Terminating error — emit error event then close the stream.
@@ -160,16 +165,14 @@ func handleStreaming(w http.ResponseWriter, r *http.Request, orchestrator *debat
 		return
 	}
 
-	// Set debate ID header (must be set before first Write in non-streaming,
-	// but here we set it after the SSE headers — clients read it from the HTTP response headers).
+	// Set debate ID header.
 	w.Header().Set("X-Debate-ID", result.DebateID)
 
-	// Emit stage_complete events for each phase with real per-phase usage.
+	// Emit stage_complete for any phases not yet sent via hook (e.g. mocked runDebate or token-budget early exit).
 	for _, ph := range result.Usage.PerPhase {
-		sendNamedSSEEvent(w, flusher, "stage_complete", map[string]any{ //nolint:errcheck
-			"phase": ph.Phase,
-			"usage": ph.Usage,
-		})
+		if !emittedPhases[ph.Phase] {
+			sendNamedSSEEvent(w, flusher, "stage_complete", map[string]any{"phase": ph.Phase, "usage": ph.Usage}) //nolint:errcheck
+		}
 	}
 
 	// Stream the final answer word by word as answer_chunk events.
